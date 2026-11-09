@@ -32,7 +32,7 @@ import {
 import {
   optionalService,
   type HostLiveSessions, type HostSession, type HostSessionActivity, type HostSessionEvent, type HostSessionHeader,
-  type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
+  type HostProjectionsValue, type HostSessionController, type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
 } from './harness.ts'
 
 const GlobalSchema = z.object({
@@ -77,6 +77,7 @@ const RECEIPTS_PER_RECORD = 16
 const TRANSITIONS_MAX = 1000
 const FOLLOW_BUFFER = 1000
 const ACTIVITY_CONCURRENCY = 2
+const PENDING_READ_TIMEOUT_MS = 5_000
 
 type Domain = OpenDomain<TaskRecord, TransitionEntry, GlobalState>
 
@@ -112,6 +113,8 @@ export class T3SidebarService extends TypertRemoteService {
   private streamSeq = 0
   private readonly followers = new Set<Follower>()
   private readonly headers = new Map<string, HostSessionHeader>()
+  /** Last durable pending-request answer per session (timed questions outlive turns). */
+  private readonly pendingCache = new Map<string, Known<readonly PendingSignal[]>>()
   /** Sessions whose committed events this process folded since the last header refresh. */
   private readonly observedLive = new Set<string>()
   /** Last activity answer per session and when it was taken. */
@@ -122,6 +125,9 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
   private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
+  private markReady: () => void = () => {}
+  /** Settles once storage is open and the startup catch-up has run. */
+  readonly ready: Promise<void> = new Promise((resolve) => { this.markReady = resolve })
 
   constructor(ctx: Context) {
     super(ctx, SERVICE_KEY, { namespace: NAMESPACE })
@@ -148,6 +154,7 @@ export class T3SidebarService extends TypertRemoteService {
     this.ctx.effect(() => () => clearInterval(refresh), 't3Sidebar: header refresh')
     // Catch up Snooze expiries and due auto-settles missed while the Host was down.
     void this.sweep()
+    this.markReady()
     // Learn which sessions already have background work (jobs, subagents,
     // schedules) so they show as Working and enter the refresh set.
     void this.seedActivity()
@@ -258,7 +265,7 @@ export class T3SidebarService extends TypertRemoteService {
     }
     const native = this.nativeOf(input.sessionId)
     const activity = await this.queryActivity(input.sessionId)
-    const facts = this.factsOf(current, activity, input.observedPending)
+    const facts = this.factsOf(current, activity, input.observedPending, await this.queryDurablePending(input.sessionId))
     let transition: Transition
     switch (input.action.kind) {
       case 'snooze': transition = snooze(current, facts, native, input.action.until, now); break
@@ -331,7 +338,8 @@ export class T3SidebarService extends TypertRemoteService {
   private recordOf(sessionId: string, now: number): TaskRecord {
     const stored = this.domain?.table('tasks').get(sessionId)
     if (stored !== undefined) return stored
-    return emptyRecord(sessionId, this.requireDomain().global.get().policyEligibleSince || now)
+    const since = this.requireDomain().global.get().policyEligibleSince
+    return emptyRecord(sessionId, since > 0 ? since : now)
   }
 
   private sessionKnown(sessionId: string): boolean {
@@ -364,6 +372,27 @@ export class T3SidebarService extends TypertRemoteService {
       this.activityCache.set(sessionId, { value: unknown, at: Date.now(), failures })
       return unknown
     }
+  }
+
+  /**
+   * Durable pending requests from the exact projection read: timed user
+   * questions (`userQuestions.active`, `open` or `continued`) can outlive the
+   * turn, so an empty activity list alone does not prove nothing is pending.
+   * Anything that cannot be established exactly stays unknown.
+   */
+  private async queryDurablePending(sessionId: string): Promise<Known<readonly PendingSignal[]>> {
+    let answer: Known<readonly PendingSignal[]> = unknown
+    try {
+      const controller = optionalService<HostSessionController>(this.ctx, 'sessionController')
+      if (controller !== undefined) {
+        const read = await controller.projections({ sessionId }, AbortSignal.timeout(PENDING_READ_TIMEOUT_MS))
+        answer = durablePendingOf(read)
+      }
+    } catch {
+      answer = unknown
+    }
+    this.pendingCache.set(sessionId, answer)
+    return answer
   }
 
   /**
@@ -425,12 +454,18 @@ export class T3SidebarService extends TypertRemoteService {
    */
   private factsOf(
     record: TaskRecord, activity: Known<readonly string[]>, observedPending: readonly PendingSignal[] | null,
+    durablePending: Known<readonly PendingSignal[]> = this.pendingCache.get(record.sessionId) ?? unknown,
   ): TaskFacts {
     const running: Known<boolean> = activity.known ? known(activity.value.includes('turn')) : unknown
-    let pending: Known<readonly PendingSignal[]>
-    if (observedPending !== null) pending = known(observedPending)
-    else if (activity.known && !activity.value.includes('turn')) pending = known([])
-    else pending = unknown
+    let pending: Known<readonly PendingSignal[]> = unknown
+    if (observedPending !== null) {
+      // The browser saw these; durable asks it may not list are added when known.
+      pending = known(durablePending.known ? mergePending(observedPending, durablePending.value) : observedPending)
+    } else if (activity.known && !activity.value.includes('turn') && durablePending.known) {
+      // In-turn waits (approvals, blocking questions) show up as `turn`
+      // activity; outside a turn only durable asks can still be pending.
+      pending = durablePending
+    }
     return { running, activity, pending, summary: record.activity }
   }
 
@@ -444,7 +479,9 @@ export class T3SidebarService extends TypertRemoteService {
       const decision = decideAutoSettle({
         policy: global.policy,
         record: this.withGlobalGrace(record, global),
-        facts: this.factsOf(record, activity, null),
+        // Display only: a session whose durable state was not read yet shows its
+        // time-based status; the sweep reads exact pending state before acting.
+        facts: this.factsOf(record, activity, null, this.pendingCache.get(record.sessionId) ?? known([])),
         native: this.nativeOf(record.sessionId),
         createdAt: header.createdAt,
         now: Date.now(),
@@ -508,6 +545,7 @@ export class T3SidebarService extends TypertRemoteService {
       }
       this.observedLive.clear()
       for (const sessionId of stale) {
+        const previous = global.seenRevisions[sessionId]
         const before = this.recordOf(sessionId, now)
         if (before.policyEligibleSince >= now && before.disposition.kind === 'normal') continue
         // The missed events are unknown, so the summary cannot prove "no new
@@ -515,7 +553,14 @@ export class T3SidebarService extends TypertRemoteService {
         let record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
         if (record.disposition.kind === 'snoozed') record = { ...record, disposition: { kind: 'normal' }, lastSnoozeWakeAt: now }
         else if (record.disposition.kind === 'settled') record = { ...record, disposition: { kind: 'normal' } }
-        await this.commit(record, before, 'missed-activity', null).catch(() => undefined)
+        try {
+          await this.commit(record, before, 'missed-activity', null)
+        } catch {
+          // Not persisted: keep the previous token (or none) so the next
+          // refresh detects the change again and retries the catch-up.
+          if (previous === undefined) delete seen[sessionId]
+          else seen[sessionId] = previous
+        }
       }
       await domain.global.set({ ...domain.global.get(), seenRevisions: seen }).catch(() => undefined)
     }).catch(() => undefined)
@@ -598,7 +643,7 @@ export class T3SidebarService extends TypertRemoteService {
         const batch = due.slice(index, index + ACTIVITY_CONCURRENCY)
         await Promise.all(batch.map(async ({ record, header }) => {
           const activity = await this.queryActivity(record.sessionId)
-          const facts = this.factsOf(record, activity, null)
+          const facts = this.factsOf(record, activity, null, await this.queryDurablePending(record.sessionId))
           const native = this.nativeOf(record.sessionId)
           const decision = decideAutoSettle({ policy: global.policy, record, facts, native, createdAt: header.createdAt, now: Date.now() })
           if (!decision.eligible || decision.deadline === null) return
@@ -729,6 +774,29 @@ export class T3SidebarService extends TypertRemoteService {
   private assertProtocol(version: number): void {
     if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
   }
+}
+
+/** Union of pending signals by request key (sources may differ for the same request). */
+function mergePending(primary: readonly PendingSignal[], extra: readonly PendingSignal[]): PendingSignal[] {
+  const keys = new Set(primary.map(signal => signal.key))
+  return [...primary, ...extra.filter(signal => !keys.has(signal.key))]
+}
+
+/**
+ * Pending requests from a `sessionController.projections()` answer. Only an
+ * exact (`sequenced`) read can prove "none": an omitted `userQuestions` key
+ * there means the capability is absent. Migration-time cache hints can only
+ * add requests; a null answer (session absent) is unknown.
+ */
+export function durablePendingOf(read: HostProjectionsValue): Known<readonly PendingSignal[]> {
+  if (read === null || typeof read !== 'object') return unknown
+  const asks = (read.values?.userQuestions as { active?: readonly { callId?: unknown; state?: unknown }[] } | undefined)?.active
+  const signals: PendingSignal[] = []
+  for (const ask of Array.isArray(asks) ? asks : []) {
+    if (typeof ask?.callId === 'string') signals.push({ source: 'userQuestions', key: ask.callId, kind: 'user-question' })
+  }
+  if (read.kind === 'sequenced') return known(signals)
+  return signals.length > 0 ? known(signals) : unknown
 }
 
 /** Backoff before re-asking a provider that failed `failures` times: 1 min doubling, capped at 30 min. */

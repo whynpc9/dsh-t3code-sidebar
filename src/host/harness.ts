@@ -39,6 +39,16 @@ export interface HostSessionPersistence {
   list(): Promise<readonly { readonly header: HostSessionHeader; readonly revision?: unknown }[]>
 }
 
+/** Answer of `sessionController.projections()`: exact values, migration hints, or absent. */
+export type HostProjectionsValue =
+  | { readonly kind: 'sequenced'; readonly asOfSeq: number; readonly values: Readonly<Record<string, unknown>> }
+  | { readonly kind: 'migration-required'; readonly values: Readonly<Record<string, unknown>> }
+  | null
+
+export interface HostSessionController {
+  projections(request: { readonly sessionId: string }, signal: AbortSignal): Promise<HostProjectionsValue>
+}
+
 export interface HostLiveSessions {
   list(): readonly { readonly header: HostSessionHeader }[]
 }

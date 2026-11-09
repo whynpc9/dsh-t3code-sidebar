@@ -1,6 +1,9 @@
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
+// Calendar tests (DST gaps) assume this zone; workers inherit it.
+process.env.TZ = 'America/New_York'
+
 export default defineConfig({
   resolve: {
     alias: {

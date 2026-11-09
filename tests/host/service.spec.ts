@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { nearestSnoozeDeadline, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
+import { durablePendingOf, nearestSnoozeDeadline, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
 import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
 import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
@@ -8,11 +8,11 @@ import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host
 const HOUR = 3_600_000
 let hosts: FakeHost[] = []
 
-async function boot(storage?: MemoryDomainFacility, revisions: Record<string, string> = {}) {
+async function boot(storage?: MemoryDomainFacility, revisions: Record<string, string> = {}, createdAt = Date.now() - 1000) {
   const host = createFakeHost(storage)
   host.headers.push(
-    { id: 's1', createdAt: Date.now() - 1000, revision: revisions.s1 },
-    { id: 's2', createdAt: Date.now() - 1000, revision: revisions.s2 },
+    { id: 's1', createdAt, revision: revisions.s1 },
+    { id: 's2', createdAt, revision: revisions.s2 },
     { id: 'child', createdAt: 0, origin: 'subagent' },
   )
   await (host.ctx as Context).plugin(T3SidebarService)
@@ -20,6 +20,7 @@ async function boot(storage?: MemoryDomainFacility, revisions: Record<string, st
     const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
     poll()
   })
+  await service.ready
   hosts.push(host)
   return { host, service }
 }
@@ -149,6 +150,8 @@ describe('T3SidebarService', () => {
   it('restarts the idle window of sessions that changed while the plugin was not running', async () => {
     const storage = new MemoryDomainFacility()
     await boot(storage, { s1: 'r1', s2: 'r1' })
+    // Installed long ago, so the restarted window is distinguishable from it.
+    ;(storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number }).policyEligibleSince = 1
     const reenabledAt = Date.now()
     const second = await boot(storage, { s1: 'r2', s2: 'r1' })
     const tasks = second.service.getSnapshot(1).tasks
@@ -198,6 +201,33 @@ describe('T3SidebarService', () => {
     expect(service.getSnapshot(1).tasks[0]?.activity).toEqual(['job'])
   })
 
+  it('does not auto-settle an overdue session whose timed question outlived its turn', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service, host } = await boot(storage, {}, Date.now() - 30 * 24 * HOUR)
+    const global = storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number; installedAt: number }
+    global.policyEligibleSince = 1
+    global.installedAt = 1
+    host.questions.set('s1', [{ callId: 'call-1', state: 'continued' }])
+    await (service as unknown as { sweep(): Promise<void> }).sweep()
+    const settledIds = () => service.getSnapshot(1).tasks.filter(task => task.record.disposition.kind === 'settled').map(task => task.sessionId)
+    expect(settledIds()).toEqual(['s2'])
+    host.questions.delete('s1')
+    await (service as unknown as { sweep(): Promise<void> }).sweep()
+    expect(settledIds().sort()).toEqual(['s1', 's2'])
+  })
+
+  it('retries a missed-activity catch-up whose task write failed', async () => {
+    const storage = new MemoryDomainFacility()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' })
+    await first.service.command(command({ sessionId: 's1', action: { kind: 'settle' } }))
+    storage.failTableWrites = true
+    const second = await boot(storage, { s1: 'r2', s2: 'r1' })
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('settled')
+    storage.failTableWrites = false
+    const third = await boot(storage, { s1: 'r2', s2: 'r1' })
+    expect(third.service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
+  })
+
   it('re-samples outstanding background activity on the sweep and publishes the change', async () => {
     const { service, host } = await boot()
     host.activity.set('s1', ['subagent'])
@@ -237,5 +267,16 @@ describe('sweepDelay', () => {
 describe('unknownRetryDelay', () => {
   it('backs off from one minute and caps at thirty', () => {
     expect([1, 2, 3, 6, 20].map(unknownRetryDelay)).toEqual([60_000, 120_000, 240_000, 1_800_000, 1_800_000])
+  })
+})
+
+describe('durablePendingOf', () => {
+  it('proves "none" only from an exact read', () => {
+    expect(durablePendingOf({ kind: 'sequenced', asOfSeq: 1, values: {} })).toEqual({ known: true, value: [] })
+    expect(durablePendingOf({ kind: 'sequenced', asOfSeq: 1, values: { userQuestions: { active: [{ callId: 'c1', state: 'continued' }] } } }))
+      .toEqual({ known: true, value: [{ source: 'userQuestions', key: 'c1', kind: 'user-question' }] })
+    expect(durablePendingOf({ kind: 'migration-required', values: {} })).toEqual({ known: false })
+    expect(durablePendingOf({ kind: 'migration-required', values: { userQuestions: { active: [{ callId: 'c2', state: 'open' }] } } }).known).toBe(true)
+    expect(durablePendingOf(null)).toEqual({ known: false })
   })
 })
