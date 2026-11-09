@@ -235,6 +235,37 @@ describe('T3SidebarService', () => {
     expect(service.listTransitions(10)).toHaveLength(0) // grace reset is not a placement change
   })
 
+  it('treats ordinary live progress as observed, not as missed activity', async () => {
+    const { service, host } = await boot(undefined, { s1: 'r1', s2: 'r1' })
+    await service.command(command({ action: { kind: 'snooze', until: Date.now() + HOUR } }))
+    const emit = (type: string, seq: number) =>
+      (host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's1' }, { type, seq, time: Date.now(), data: {} })
+    const refresh = () => (service as unknown as { refreshHeaders(): Promise<void> }).refreshHeaders()
+    emit('step/start', 50) // not folded into the summary, but changes the persistence token
+    host.headers[0]!.revision = 'r2'
+    await refresh()
+    emit('assistant/message', 51)
+    host.headers[0]!.revision = 'r3'
+    await refresh()
+    await refresh() // no new events, token unchanged
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('snoozed')
+  })
+
+  it('recovers a settled task whose new-input fold could not be persisted', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service, host } = await boot(storage, { s1: 'r1', s2: 'r1' })
+    await service.command(command({ action: { kind: 'settle' } }))
+    storage.failTableWrites = true
+    ;(host.ctx as unknown as { emit(name: string, ...args: unknown[]): void })
+      .emit('session/event', { id: 's1' }, { type: 'user/message', seq: 60, time: Date.now(), data: { source: { kind: 'user' } } })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('settled')
+    storage.failTableWrites = false
+    host.headers[0]!.revision = 'r2'
+    await (service as unknown as { refreshHeaders(): Promise<void> }).refreshHeaders()
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
+  })
+
   it('retries a missed-activity catch-up whose task write failed', async () => {
     const storage = new MemoryDomainFacility()
     const first = await boot(storage, { s1: 'r1', s2: 'r1' })

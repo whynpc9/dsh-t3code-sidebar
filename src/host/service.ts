@@ -118,8 +118,10 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly headers = new Map<string, HostSessionHeader>()
   /** Last durable pending-request answer per session (timed questions outlive turns). */
   private readonly pendingCache = new Map<string, Known<readonly PendingSignal[]>>()
-  /** Sessions whose committed events this process folded since the last header refresh. */
-  private readonly observedLive = new Set<string>()
+  /** Sessions with committed events observed live since the last header refresh began. */
+  private observedLive = new Set<string>()
+  /** Sessions whose event fold could not be persisted; catch-up recovers them. */
+  private readonly failedFolds = new Set<string>()
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -541,6 +543,10 @@ export class T3SidebarService extends TypertRemoteService {
     const persistence = optionalService<HostSessionPersistence>(this.ctx, 'sessionPersistence')
     const live = optionalService<HostLiveSessions>(this.ctx, 'sessions')
     let stored: Awaited<ReturnType<HostSessionPersistence['list']>> | null = null
+    // Take the observed set *before* reading the tokens: events that commit
+    // while the listing runs belong to the next refresh's comparison.
+    const observed = this.observedLive
+    this.observedLive = new Set()
     try {
       stored = persistence === undefined ? [] : await persistence.list()
       for (const { header } of stored) this.rememberHeader(header)
@@ -548,7 +554,8 @@ export class T3SidebarService extends TypertRemoteService {
       // Storage faults never imply "no sessions"; keep what we already know.
     }
     for (const { header } of live?.list() ?? []) this.rememberHeader(header)
-    if (stored !== null) await this.catchUpMissedActivity(stored)
+    if (stored !== null) await this.catchUpMissedActivity(stored, observed)
+    else for (const sessionId of observed) this.observedLive.add(sessionId)
   }
 
   /**
@@ -557,7 +564,9 @@ export class T3SidebarService extends TypertRemoteService {
    * summary never saw; its idle window restarts now (conservative: the real
    * activity time is unknown, but it is no later than now).
    */
-  private async catchUpMissedActivity(stored: Awaited<ReturnType<HostSessionPersistence['list']>>): Promise<void> {
+  private async catchUpMissedActivity(
+    stored: Awaited<ReturnType<HostSessionPersistence['list']>>, observed: ReadonlySet<string>,
+  ): Promise<void> {
     await this.queue.run(async () => {
       const domain = this.requireDomain()
       const global = domain.global.get()
@@ -569,18 +578,21 @@ export class T3SidebarService extends TypertRemoteService {
         const token = JSON.stringify(revision)
         seen[header.id] = token
         const previous = global.seenRevisions[header.id]
-        if (this.observedLive.has(header.id)) continue
+        if (this.failedFolds.has(header.id)) { stale.push(header.id); continue }
+        if (observed.has(header.id)) continue
         const changedWhileAway = previous !== undefined
           ? previous !== token
           // Unknown to us but created after installation: created while we were away.
           : global.installedAt > 0 && header.createdAt > global.installedAt && Object.keys(global.seenRevisions).length > 0
         if (changedWhileAway) stale.push(header.id)
       }
-      this.observedLive.clear()
       for (const sessionId of stale) {
         const previous = global.seenRevisions[sessionId]
         const before = this.recordOf(sessionId, now)
-        if (before.policyEligibleSince >= now && before.disposition.kind === 'normal') continue
+        if (before.policyEligibleSince >= now && before.disposition.kind === 'normal') {
+          this.failedFolds.delete(sessionId)
+          continue
+        }
         // The missed events are unknown, so the summary cannot prove "no new
         // input": surface parked tasks rather than keep them hidden.
         let record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
@@ -588,6 +600,7 @@ export class T3SidebarService extends TypertRemoteService {
         else if (record.disposition.kind === 'settled') record = { ...record, disposition: { kind: 'normal' } }
         try {
           await this.commit(record, before, 'missed-activity', null)
+          this.failedFolds.delete(sessionId)
         } catch {
           // Not persisted: keep the previous token (or none) so the next
           // refresh detects the change again and retries the catch-up.
@@ -608,12 +621,15 @@ export class T3SidebarService extends TypertRemoteService {
 
   private onSessionEvent(session: HostSession, event: HostSessionEvent): void {
     if (this.disposed || this.domain === undefined) return
-    const foldable = toFoldable(event)
-    if (foldable === null) return
     if (session.header !== undefined) this.rememberHeader(session.header)
     const sessionId = session.id
     if (!this.headers.has(sessionId)) return
+    // Every committed event (step progress, assistant output, …) changes the
+    // persistence token; record that it was observed live even when the
+    // summary does not fold it, so catch-up never mistakes it for missed work.
     this.observedLive.add(sessionId)
+    const foldable = toFoldable(event)
+    if (foldable === null) return
     void this.queue.run(async () => {
       const now = Date.now()
       const before = this.recordOf(sessionId, now)
@@ -624,7 +640,13 @@ export class T3SidebarService extends TypertRemoteService {
       if (event.type === 'turn/end') this.refreshActivitySoon(sessionId)
       const facts = this.factsOf(record, this.cachedActivity(record), null)
       record = reconcile(record, facts, this.nativeOf(sessionId), now) ?? record
-      await this.commit(record, before, `activity:${event.type}`, null).catch(() => undefined)
+      try {
+        await this.commit(record, before, `activity:${event.type}`, null)
+      } catch {
+        // The fold is lost; let catch-up recover it conservatively instead of
+        // acknowledging this session's new persistence token.
+        this.failedFolds.add(sessionId)
+      }
     })
   }
 
