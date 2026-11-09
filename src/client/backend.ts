@@ -291,11 +291,9 @@ export class LocalBackend implements TaskBackend {
     this.publish()
   }
 
-  /** After a store write: refresh from storage, render, and tell other tabs. */
-  private afterWrite(sessionId: string, written: TaskRecord | null): void {
+  /** After a store write: refresh from the store (which keeps unpersisted records), render, tell other tabs. */
+  private afterWrite(_sessionId: string, _written: TaskRecord | null): void {
     this.records = this.store.readAll()
-    // Storage may be unavailable (private mode); keep the change for this tab.
-    if (written !== null && this.records.get(sessionId)?.revision !== written.revision) this.records.set(sessionId, written)
     this.channel?.postMessage('changed')
     this.publish()
   }

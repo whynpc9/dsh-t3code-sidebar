@@ -37,11 +37,25 @@ export function defaultLockRunner(): LockRunner {
   }
 }
 
+/** The record with the higher revision (either may be absent). */
+function newer(left: TaskRecord | undefined, right: TaskRecord | undefined): TaskRecord | undefined {
+  if (left === undefined) return right
+  if (right === undefined) return left
+  return right.revision > left.revision ? right : left
+}
+
 function safeStorage(): KeyValueStorage | null {
   try { return globalThis.localStorage ?? null } catch { return null }
 }
 
 export class LocalRecordStore {
+  /**
+   * Records this tab could not persist (storage blocked or full). Reads merge
+   * them in, so an acknowledged change is never lost by a later command; they
+   * only live as long as this tab.
+   */
+  private readonly unpersisted = new Map<string, TaskRecord>()
+
   constructor(
     private readonly storage: KeyValueStorage | null = safeStorage(),
     private readonly lock: LockRunner = defaultLockRunner(),
@@ -55,17 +69,21 @@ export class LocalRecordStore {
   }
 
   read(sessionId: string): TaskRecord | undefined {
-    return this.parse(this.get(RECORD_PREFIX + sessionId))
+    return newer(this.parse(this.get(RECORD_PREFIX + sessionId)), this.unpersisted.get(sessionId))
   }
 
   readAll(): Map<string, TaskRecord> {
     const records = new Map<string, TaskRecord>()
-    if (this.storage === null) return records
+    if (this.storage === null) return new Map(this.unpersisted)
     for (let index = 0; index < this.storage.length; index += 1) {
       const key = this.storage.key(index)
       if (key === null || !key.startsWith(RECORD_PREFIX)) continue
       const record = this.parse(this.get(key))
       if (record !== undefined) records.set(record.sessionId, record)
+    }
+    for (const [sessionId, record] of this.unpersisted) {
+      const merged = newer(records.get(sessionId), record)
+      if (merged !== undefined) records.set(sessionId, merged)
     }
     return records
   }
@@ -79,11 +97,17 @@ export class LocalRecordStore {
     return this.lock(LOCK_NAME, () => {
       const next = change(this.read(sessionId))
       if (next === null) return null
+      let persisted = false
       try {
-        this.storage?.setItem(RECORD_PREFIX + sessionId, JSON.stringify(next))
+        if (this.storage !== null) {
+          this.storage.setItem(RECORD_PREFIX + sessionId, JSON.stringify(next))
+          persisted = true
+        }
       } catch {
-        // Storage may be full or blocked; the caller still applies the change in this tab.
+        persisted = false
       }
+      if (persisted) this.unpersisted.delete(sessionId)
+      else this.unpersisted.set(sessionId, next)
       return next
     })
   }

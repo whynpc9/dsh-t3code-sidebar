@@ -48,6 +48,8 @@ const GlobalSchema = z.object({
    * running (disabled, uninstalled), so the recorded summary may be stale.
    */
   seenRevisions: z.record(z.string(), z.string()).default({}),
+  /** Native archive set at the last sweep; a session leaving it was restored. */
+  archivedSeen: z.array(z.string()).default([]),
 })
 type GlobalState = z.infer<typeof GlobalSchema>
 
@@ -58,6 +60,7 @@ const NOT_INSTALLED: GlobalState = {
   policy: { revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false },
   policyEligibleSince: 0,
   seenRevisions: {},
+  archivedSeen: [],
 }
 
 export const TASK_DOMAIN = defineDomain({
@@ -410,6 +413,36 @@ export class T3SidebarService extends TypertRemoteService {
     return cached.value
   }
 
+  /**
+   * Compare the native archive set with the one seen at the last sweep. A
+   * session that left it was restored (from any window, or while this Host
+   * was down): its idle window restarts now, so a restored long-idle session
+   * is not settled seconds after Restore (time-policy spec §4).
+   */
+  private async graceRestoredSessions(): Promise<void> {
+    const registry = optionalService<HostWorkspaceRegistry>(this.ctx, 'workspaceRegistry')
+    if (registry === undefined) return
+    const domain = this.requireDomain()
+    const current = [...registry.archivedSessionIds]
+    const archived = new Set(current)
+    const now = Date.now()
+    for (const sessionId of domain.global.get().archivedSeen) {
+      if (archived.has(sessionId) || !this.headers.has(sessionId)) continue
+      const before = this.recordOf(sessionId, now)
+      const record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
+      try {
+        await this.commit(record, before, 'restored', null)
+      } catch {
+        // Keep it in the seen set so the next sweep retries the grace reset.
+        current.push(sessionId)
+      }
+    }
+    const seen = domain.global.get().archivedSeen
+    if (seen.length !== current.length || seen.some((id, index) => id !== current[index])) {
+      await domain.global.set({ ...domain.global.get(), archivedSeen: current }).catch(() => undefined)
+    }
+  }
+
   /** Re-query every session whose cached activity is non-empty; publish changed views. */
   private async refreshOutstandingActivity(): Promise<void> {
     const now = Date.now()
@@ -613,6 +646,9 @@ export class T3SidebarService extends TypertRemoteService {
       const domain = this.requireDomain()
       const now = Date.now()
       const global = domain.global.get()
+      // 0. Restorations from the archive get a fresh automatic-settle grace
+      //    window before any settle decision below can see them.
+      await this.graceRestoredSessions()
       // 1. Snooze expiry (exact deadlines).
       for (const [, record] of [...domain.table('tasks').entries()]) {
         if (record.disposition.kind !== 'snoozed') continue

@@ -66,4 +66,17 @@ describe('LocalRecordStore', () => {
     expect(storage.getItem(`${RECORD_PREFIX}s1`)).not.toBeNull()
     expect(store.read('s1')?.disposition.kind).toBe('snoozed')
   })
+
+  it('keeps acknowledged changes readable when storage refuses writes', async () => {
+    const storage = new MemoryStorage()
+    storage.setItem = () => { throw new Error('QuotaExceededError') }
+    const store = new LocalRecordStore(storage, sharedLock())
+    await store.update('s1', current => snoozed(current ?? emptyRecord('s1', 0)))
+    await store.update('s2', current => settled(current ?? emptyRecord('s2', 0)))
+    const all = store.readAll()
+    expect(all.get('s1')?.disposition.kind).toBe('snoozed')
+    expect(all.get('s2')?.disposition.kind).toBe('settled')
+    await store.update('s1', current => settled(current ?? emptyRecord('s1', 0)))
+    expect(store.read('s1')).toMatchObject({ revision: 2, disposition: { kind: 'settled' } })
+  })
 })

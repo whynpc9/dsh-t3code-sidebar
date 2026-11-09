@@ -216,6 +216,25 @@ describe('T3SidebarService', () => {
     expect(settledIds().sort()).toEqual(['s1', 's2'])
   })
 
+  it('gives a long-idle session restored from the archive a fresh grace window instead of settling it', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service, host } = await boot(storage, {}, Date.now() - 30 * 24 * HOUR)
+    const global = storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number; installedAt: number }
+    global.policyEligibleSince = 1
+    global.installedAt = 1
+    host.registry.archivedSessionIds.push('s1', 's2')
+    const sweep = () => (service as unknown as { sweep(): Promise<void> }).sweep()
+    await sweep() // archived: skipped, and remembered as archived
+    expect(service.getSnapshot(1).tasks.filter(task => task.record.disposition.kind === 'settled')).toHaveLength(0)
+    const restoredAt = Date.now()
+    host.registry.archivedSessionIds.splice(0) // both restored
+    await sweep()
+    const tasks = service.getSnapshot(1).tasks
+    expect(tasks.filter(task => task.record.disposition.kind === 'settled')).toHaveLength(0)
+    expect(tasks.map(task => task.record.policyEligibleSince >= restoredAt)).toEqual([true, true])
+    expect(service.listTransitions(10)).toHaveLength(0) // grace reset is not a placement change
+  })
+
   it('retries a missed-activity catch-up whose task write failed', async () => {
     const storage = new MemoryDomainFacility()
     const first = await boot(storage, { s1: 'r1', s2: 'r1' })
