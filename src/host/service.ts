@@ -42,6 +42,12 @@ const GlobalSchema = z.object({
   policy: TimePolicySchema,
   /** Grace start applied to every session when the policy was (re)enabled or shortened. */
   policyEligibleSince: z.number(),
+  /**
+   * Last persistence change token seen per session. A token that changed while
+   * this plugin observed no event means activity happened while it was not
+   * running (disabled, uninstalled), so the recorded summary may be stale.
+   */
+  seenRevisions: z.record(z.string(), z.string()).default({}),
 })
 type GlobalState = z.infer<typeof GlobalSchema>
 
@@ -51,6 +57,7 @@ const NOT_INSTALLED: GlobalState = {
   dataRevision: 0,
   policy: { revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false },
   policyEligibleSince: 0,
+  seenRevisions: {},
 }
 
 export const TASK_DOMAIN = defineDomain({
@@ -105,6 +112,8 @@ export class T3SidebarService extends TypertRemoteService {
   private streamSeq = 0
   private readonly followers = new Set<Follower>()
   private readonly headers = new Map<string, HostSessionHeader>()
+  /** Sessions whose committed events this process folded since the last header refresh. */
+  private readonly observedLive = new Set<string>()
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -411,13 +420,52 @@ export class T3SidebarService extends TypertRemoteService {
   private async refreshHeaders(): Promise<void> {
     const persistence = optionalService<HostSessionPersistence>(this.ctx, 'sessionPersistence')
     const live = optionalService<HostLiveSessions>(this.ctx, 'sessions')
+    let stored: Awaited<ReturnType<HostSessionPersistence['list']>> | null = null
     try {
-      const stored = persistence === undefined ? [] : await persistence.list()
+      stored = persistence === undefined ? [] : await persistence.list()
       for (const { header } of stored) this.rememberHeader(header)
     } catch {
       // Storage faults never imply "no sessions"; keep what we already know.
     }
     for (const { header } of live?.list() ?? []) this.rememberHeader(header)
+    if (stored !== null) await this.catchUpMissedActivity(stored)
+  }
+
+  /**
+   * Compare persistence change tokens with the ones last seen. A session that
+   * changed without this process folding any of its events had activity the
+   * summary never saw; its idle window restarts now (conservative: the real
+   * activity time is unknown, but it is no later than now).
+   */
+  private async catchUpMissedActivity(stored: Awaited<ReturnType<HostSessionPersistence['list']>>): Promise<void> {
+    await this.queue.run(async () => {
+      const domain = this.requireDomain()
+      const global = domain.global.get()
+      const now = Date.now()
+      const seen: Record<string, string> = {}
+      const stale: string[] = []
+      for (const { header, revision } of stored) {
+        if (header.origin === 'subagent' || revision === undefined) continue
+        const token = JSON.stringify(revision)
+        seen[header.id] = token
+        const previous = global.seenRevisions[header.id]
+        if (this.observedLive.has(header.id)) continue
+        const changedWhileAway = previous !== undefined
+          ? previous !== token
+          // Unknown to us but created after installation: created while we were away.
+          : global.installedAt > 0 && header.createdAt > global.installedAt && Object.keys(global.seenRevisions).length > 0
+        if (changedWhileAway) stale.push(header.id)
+      }
+      this.observedLive.clear()
+      for (const sessionId of stale) {
+        const before = this.recordOf(sessionId, now)
+        if (before.policyEligibleSince >= now) continue
+        const record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
+        await domain.table('tasks').put(sessionId, record).catch(() => undefined)
+        this.publish([this.viewOf(record)], null)
+      }
+      await domain.global.set({ ...domain.global.get(), seenRevisions: seen }).catch(() => undefined)
+    }).catch(() => undefined)
   }
 
   private rememberHeader(header: HostSessionHeader): void {
@@ -434,6 +482,7 @@ export class T3SidebarService extends TypertRemoteService {
     if (session.header !== undefined) this.rememberHeader(session.header)
     const sessionId = session.id
     if (!this.headers.has(sessionId)) return
+    this.observedLive.add(sessionId)
     void this.queue.run(async () => {
       const now = Date.now()
       const before = this.recordOf(sessionId, now)
@@ -456,9 +505,7 @@ export class T3SidebarService extends TypertRemoteService {
     if (this.timer !== undefined) clearTimeout(this.timer)
     const now = Date.now()
     let nearest = now + SWEEP_MS
-    for (const [, record] of this.domain.table('tasks').entries()) {
-      if (record.disposition.kind === 'snoozed') nearest = Math.min(nearest, record.disposition.until)
-    }
+    nearest = Math.min(nearest, nearestSnoozeDeadline(this.domain.table('tasks').entries(), id => this.nativeOf(id)) ?? nearest)
     const delay = Math.min(Math.max(nearest - now, 0) + 5, MAX_TIMER_MS)
     this.timer = setTimeout(() => { void this.sweep() }, delay)
   }
@@ -610,6 +657,24 @@ export class T3SidebarService extends TypertRemoteService {
   private assertProtocol(version: number): void {
     if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
   }
+}
+
+/**
+ * Earliest Snooze deadline the sweep can actually materialize. Pinned and
+ * archived sessions keep their Snooze frozen (reconcile leaves them alone), so
+ * their deadlines must not drive the timer or it would spin on a past instant.
+ */
+export function nearestSnoozeDeadline(
+  records: Iterable<[string, TaskRecord]>, nativeOf: (sessionId: string) => NativeState,
+): number | null {
+  let nearest: number | null = null
+  for (const [, record] of records) {
+    if (record.disposition.kind !== 'snoozed') continue
+    const native = nativeOf(record.sessionId)
+    if (native.pinned || native.archived) continue
+    if (nearest === null || record.disposition.until < nearest) nearest = record.disposition.until
+  }
+  return nearest
 }
 
 /** Reduce a committed session event to what the activity summary folds. */

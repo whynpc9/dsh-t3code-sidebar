@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { T3SidebarService } from '../../src/host/service.ts'
+import { nearestSnoozeDeadline, T3SidebarService } from '../../src/host/service.ts'
+import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
 import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
 
 const HOUR = 3_600_000
 let hosts: FakeHost[] = []
 
-async function boot(storage?: MemoryDomainFacility) {
+async function boot(storage?: MemoryDomainFacility, revisions: Record<string, string> = {}) {
   const host = createFakeHost(storage)
-  host.headers.push({ id: 's1', createdAt: Date.now() - 1000 }, { id: 's2', createdAt: Date.now() - 1000 }, { id: 'child', createdAt: 0, origin: 'subagent' })
+  host.headers.push(
+    { id: 's1', createdAt: Date.now() - 1000, revision: revisions.s1 },
+    { id: 's2', createdAt: Date.now() - 1000, revision: revisions.s2 },
+    { id: 'child', createdAt: 0, origin: 'subagent' },
+  )
   await (host.ctx as Context).plugin(T3SidebarService)
   const service = await new Promise<T3SidebarService>((resolve) => {
     const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
@@ -122,5 +127,29 @@ describe('T3SidebarService', () => {
     const second = await boot(storage)
     expect(second.service.getSnapshot(1).tasks).toMatchObject([{ sessionId: 's1', record: { disposition: { kind: 'snoozed' } } }])
     expect(second.service.getSnapshot(1).installationId).toBe(first.service.getSnapshot(1).installationId)
+  })
+
+  it('restarts the idle window of sessions that changed while the plugin was not running', async () => {
+    const storage = new MemoryDomainFacility()
+    await boot(storage, { s1: 'r1', s2: 'r1' })
+    const reenabledAt = Date.now()
+    const second = await boot(storage, { s1: 'r2', s2: 'r1' })
+    const tasks = second.service.getSnapshot(1).tasks
+    expect(tasks.find(task => task.sessionId === 's1')?.record.policyEligibleSince).toBeGreaterThanOrEqual(reenabledAt)
+    expect(tasks.find(task => task.sessionId === 's2')).toBeUndefined()
+  })
+})
+
+describe('nearestSnoozeDeadline', () => {
+  const snoozed = (id: string, until: number): [string, TaskRecord] => [id, {
+    ...emptyRecord(id, 0),
+    disposition: { kind: 'snoozed', until, setAt: 0, baselinePending: [], baselineTurnEndSeq: null, baselineUserInputAt: null },
+  }]
+
+  it('ignores frozen (pinned or archived) Snoozes so an expired frozen deadline cannot spin the timer', () => {
+    const records = [snoozed('pinned', 10), snoozed('archived', 20), snoozed('live', 30)]
+    const native = (id: string) => ({ pinned: id === 'pinned', archived: id === 'archived' })
+    expect(nearestSnoozeDeadline(records, native)).toBe(30)
+    expect(nearestSnoozeDeadline(records.slice(0, 2), native)).toBeNull()
   })
 })

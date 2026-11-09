@@ -54,7 +54,7 @@ export interface FakeHost {
   storage: MemoryDomainFacility
   registry: { pinnedSessionIds: string[]; archivedSessionIds: string[] }
   activity: Map<string, string[]>
-  headers: { id: string; createdAt: number; origin?: 'subagent' }[]
+  headers: { id: string; createdAt: number; origin?: 'subagent'; revision?: string }[]
 }
 
 export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
@@ -64,7 +64,7 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   const headers: FakeHost['headers'] = []
   ctx.provide('storageDomain', storage)
   ctx.provide('workspaceRegistry', registry)
-  ctx.provide('sessionPersistence', { list: async () => headers.map(header => ({ header })) })
+  ctx.provide('sessionPersistence', { list: async () => headers.map(({ revision, ...header }) => ({ header, revision })) })
   ;(ctx as unknown as { on: (name: string, fn: unknown) => void }).on('workspace/session-activity',
     async ({ sessionId }: { sessionId: string }, next: () => Promise<readonly { kind: string }[]>) =>
       [...(activity.get(sessionId) ?? []).map(kind => ({ kind })), ...await next()])

@@ -35,7 +35,8 @@ export interface HostWorkspaceRegistry {
 }
 
 export interface HostSessionPersistence {
-  list(): Promise<readonly { readonly header: HostSessionHeader }[]>
+  /** `revision` is an opaque change token: it differs whenever the stored session changed. */
+  list(): Promise<readonly { readonly header: HostSessionHeader; readonly revision?: unknown }[]>
 }
 
 export interface HostLiveSessions {

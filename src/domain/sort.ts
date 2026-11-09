@@ -41,10 +41,11 @@ export function comparatorFor(placement: Placement): (left: SortInput, right: So
       return (left, right) => (left.pinIndex - right.pinIndex) || byIdAsc(left, right)
     case 'active':
       return (left, right) => (activeKey(right) - activeKey(left)) || byIdAsc(left, right)
-    case 'working':
-      return (left, right) =>
-        (maxOf(right.facts.summary.lastTurnStartAt, right.fallbackAt) - maxOf(left.facts.summary.lastTurnStartAt, left.fallbackAt))
-        || byIdAsc(left, right)
+    case 'working': {
+      // Turn start when known; list activity time only for cold rows without one.
+      const started = (input: SortInput): number => input.facts.summary.lastTurnStartAt ?? input.fallbackAt
+      return (left, right) => (started(right) - started(left)) || byIdAsc(left, right)
+    }
     case 'snoozed': {
       const until = (input: SortInput): number =>
         input.record?.disposition.kind === 'snoozed' ? input.record.disposition.until : Number.POSITIVE_INFINITY

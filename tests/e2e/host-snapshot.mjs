@@ -1,7 +1,7 @@
 // Print the Host t3Sidebar snapshot through the authenticated /api route.
 import { chromium } from 'playwright-core'
 import { homedir } from 'node:os'
-const [url, method = 'getSnapshot', args = '{"protocolVersion":1}'] = process.argv.slice(2)
+const [url, method = 'getSnapshot', args = '{"t3ProtocolVersion":1}'] = process.argv.slice(2)
 const browser = await chromium.launch({ executablePath: `${homedir()}/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell` })
 const page = await browser.newPage()
 await page.goto(url)

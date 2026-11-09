@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { derivePlacement, rowStatus } from '../../src/domain/placement.ts'
 import { reconcile, reopen, settle, snooze } from '../../src/domain/commands.ts'
+import { comparatorFor } from '../../src/domain/sort.ts'
 import { HOUR_MS } from '../../src/domain/time.ts'
 import { T0, approval, facts, native, question, record } from './fixtures.ts'
 
@@ -115,5 +116,19 @@ describe('Settled', () => {
     expect(reconcile(reopened.record, facts(), native, T0 + 2)).toBeNull()
     const released = reconcile(reopened.record, facts({ summary: { lastUserInputAt: T0 + 3 } }), native, T0 + 3)
     expect(released?.autoSettleHold).toBeNull()
+  })
+})
+
+describe('Working order', () => {
+  it('sorts by turn start and ignores newer list activity when the start is known', () => {
+    const row = (id: string, startedAt: number | null, updatedAt: number) => ({
+      sessionId: id, record: undefined, pinIndex: -1, fallbackAt: updatedAt,
+      facts: facts({ running: true, summary: { lastTurnStartAt: startedAt } }),
+    })
+    const older = row('older', T0, T0 + 10_000)
+    const newer = row('newer', T0 + 5_000, T0 + 5_000)
+    const cold = row('cold', null, T0 + 2_000)
+    const order = [older, newer, cold].sort(comparatorFor('working')).map(entry => entry.sessionId)
+    expect(order).toEqual(['newer', 'cold', 'older'])
   })
 })
