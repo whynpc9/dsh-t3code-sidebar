@@ -56,6 +56,23 @@ describe('T3SidebarService', () => {
     expect(stale).toMatchObject({ ok: false, code: 'CONFLICT', task: { record: { revision: 1 } } })
   })
 
+  it('keeps a committed task when bookkeeping fails and re-publishes it on replay', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service } = await boot(storage)
+    const controller = new AbortController()
+    const iterator = service.follow(1, controller.signal)[Symbol.asyncIterator]()
+    await iterator.next() // baseline
+    storage.failGlobalWrites = true
+    const input = command({ action: { kind: 'snooze', until: Date.now() + HOUR } })
+    const result = await service.command(input)
+    expect(result).toMatchObject({ ok: true, task: { record: { disposition: { kind: 'snoozed' } } } })
+    expect((await iterator.next()).value).toMatchObject({ kind: 'delta', tasks: [{ sessionId: 's1' }] })
+    storage.failGlobalWrites = false
+    expect(await service.command(input)).toMatchObject({ ok: true, replayed: true })
+    expect((await iterator.next()).value).toMatchObject({ kind: 'delta', tasks: [{ sessionId: 's1', record: { revision: 1 } }] })
+    controller.abort()
+  })
+
   it('validates input on the Host and refuses unknown sessions and pinned sessions', async () => {
     const { service, host } = await boot()
     expect(await service.command({ nonsense: true })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })

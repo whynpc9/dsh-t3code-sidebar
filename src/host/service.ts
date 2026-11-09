@@ -247,7 +247,11 @@ export class T3SidebarService extends TypertRemoteService {
       if (receipt.digest !== digest) {
         return { ok: false, code: 'CONFLICT', message: 'command id reused with another payload', task: this.viewOf(current) }
       }
-      return { ok: true, task: this.viewOf(current), dataRevision: domain.global.get().dataRevision, replayed: true }
+      // Re-publish on replay: a client retrying after a lost response, or other
+      // windows that missed the original delta, converge on the committed state.
+      const view = this.viewOf(current)
+      this.publish([view], null)
+      return { ok: true, task: view, dataRevision: domain.global.get().dataRevision, replayed: true }
     }
     if (input.expectedRevision !== current.revision) {
       return { ok: false, code: 'CONFLICT', message: 'task changed', task: this.viewOf(current) }
@@ -284,9 +288,17 @@ export class T3SidebarService extends TypertRemoteService {
     audit: { anchorAt: number; deadline: number; policyRevision: number } | null,
   ): Promise<void> {
     const domain = this.requireDomain()
+    // The task record (with its command receipt) is the single authoritative
+    // write: if it fails, nothing changed. Once it succeeds the change is
+    // committed and is always published; the revision counter and audit entry
+    // that follow are best-effort bookkeeping and cannot undo it.
     await domain.table('tasks').put(record.sessionId, record)
-    const global = domain.global.get()
-    await domain.global.set({ ...global, dataRevision: global.dataRevision + 1 })
+    try {
+      const global = domain.global.get()
+      await domain.global.set({ ...global, dataRevision: global.dataRevision + 1 })
+    } catch {
+      // dataRevision is informational; the record revision guards commands.
+    }
     if (before.disposition.kind !== record.disposition.kind) {
       await this.appendTransition({
         id: randomId(),
@@ -298,7 +310,7 @@ export class T3SidebarService extends TypertRemoteService {
         policyRevision: audit?.policyRevision ?? null,
         anchorAt: audit?.anchorAt ?? null,
         deadline: audit?.deadline ?? null,
-      })
+      }).catch(() => undefined)
     }
     this.publish([this.viewOf(record)], null)
     this.schedule()

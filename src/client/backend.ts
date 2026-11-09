@@ -12,7 +12,7 @@ import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-
 import { z } from 'zod'
 import { REMOTE_SPEC, NAMESPACE } from '../contracts/remote.ts'
 import {
-  PROTOCOL_VERSION, TaskRecordSchema,
+  PROTOCOL_VERSION,
   type Capabilities, type CommandAction, type CommandResult, type FollowEvent, type PolicyResult, type Snapshot, type TaskView,
 } from '../contracts/schema.ts'
 import { reconcile, reopen, setPolicyOverride, settle, snooze, type Transition } from '../domain/commands.ts'
@@ -20,6 +20,7 @@ import {
   DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, emptyRecord, known,
   type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
+import { LocalRecordStore } from './local-store.ts'
 import { createStore, type Store } from './store.ts'
 
 export type BackendKind = 'host' | 'local'
@@ -253,29 +254,23 @@ class HostBackend implements TaskBackend {
 
 // ── Browser-only backend ────────────────────────────────────────────────────
 
-const LOCAL_KEY = 't3-sidebar:v1:local-records'
 const CHANNEL = 't3-sidebar:v1'
-const LocalRecordsSchema = z.record(z.string(), TaskRecordSchema)
-
-function readLocal(): Map<string, TaskRecord> {
-  try {
-    const raw = globalThis.localStorage?.getItem(LOCAL_KEY)
-    if (raw === null || raw === undefined) return new Map()
-    const parsed = LocalRecordsSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? new Map(Object.entries(parsed.data) as [string, TaskRecord][]) : new Map()
-  } catch {
-    return new Map()
-  }
-}
 
 export class LocalBackend implements TaskBackend {
   readonly state: Store<BackendState>
   private records: Map<string, TaskRecord>
   private readonly channel: BroadcastChannel | null
   private readonly timer: ReturnType<typeof setInterval>
+  private readonly onStorage = (event: StorageEvent) => {
+    if (LocalRecordStore.owns(event.key)) this.reload()
+  }
 
-  constructor(reason: string, private readonly factsFor: (sessionId: string) => { facts: TaskFacts; native: NativeState } | null) {
-    this.records = readLocal()
+  constructor(
+    reason: string,
+    private readonly factsFor: (sessionId: string) => { facts: TaskFacts; native: NativeState } | null,
+    private readonly store = new LocalRecordStore(),
+  ) {
+    this.records = store.readAll()
     this.state = createStore<BackendState>({
       kind: 'local',
       status: 'ready',
@@ -286,8 +281,23 @@ export class LocalBackend implements TaskBackend {
       reason,
     })
     this.channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL)
-    if (this.channel !== null) this.channel.onmessage = () => { this.records = readLocal(); this.publish() }
-    this.timer = setInterval(() => { this.tick() }, 15_000)
+    if (this.channel !== null) this.channel.onmessage = () => { this.reload() }
+    globalThis.addEventListener?.('storage', this.onStorage)
+    this.timer = setInterval(() => { void this.tick() }, 15_000)
+  }
+
+  private reload(): void {
+    this.records = this.store.readAll()
+    this.publish()
+  }
+
+  /** After a store write: refresh from storage, render, and tell other tabs. */
+  private afterWrite(sessionId: string, written: TaskRecord | null): void {
+    this.records = this.store.readAll()
+    // Storage may be unavailable (private mode); keep the change for this tab.
+    if (written !== null && this.records.get(sessionId)?.revision !== written.revision) this.records.set(sessionId, written)
+    this.channel?.postMessage('changed')
+    this.publish()
   }
 
   private views(): Map<string, TaskView> {
@@ -300,64 +310,64 @@ export class LocalBackend implements TaskBackend {
     this.state.set({ ...this.state.getSnapshot(), tasks: this.views() })
   }
 
-  private persist(): void {
-    try {
-      globalThis.localStorage?.setItem(LOCAL_KEY, JSON.stringify(Object.fromEntries(this.records)))
-    } catch {
-      // Storage may be unavailable (private mode); state still applies to this tab.
-    }
-    this.channel?.postMessage('changed')
-    this.publish()
-  }
-
   /** Materialize Snooze expiry and new-activity wakes while a tab is open. */
-  private tick(): void {
-    let changed = false
-    for (const [id, record] of this.records) {
-      if (record.disposition.kind === 'normal') continue
+  private async tick(): Promise<void> {
+    for (const [id, cached] of this.records) {
+      if (cached.disposition.kind === 'normal') continue
       const live = this.factsFor(id)
       if (live === null) continue
-      const next = reconcile(record, { ...live.facts, summary: record.activity }, live.native, Date.now())
-      if (next !== null) { this.records.set(id, next); changed = true }
+      const written = await this.store.update(id, current =>
+        current === undefined ? null : reconcile(current, { ...live.facts, summary: current.activity }, live.native, Date.now()))
+      if (written !== null) this.afterWrite(id, written)
     }
-    if (changed) this.persist()
   }
 
   /** Record a browser-observed turn boundary so Settled tasks reopen on new work. */
   observeTurn(sessionId: string, running: boolean): void {
-    const record = this.records.get(sessionId)
-    if (record === undefined) return
+    if (!this.records.has(sessionId)) return
     const now = Date.now()
-    const summary = record.activity
-    const seq = Math.max(summary.lastTurnStartSeq ?? 0, summary.lastTurnEnd?.seq ?? 0) + 1
-    const activity = running
-      ? { ...summary, lastTurnStartSeq: seq, lastTurnStartAt: now }
-      : { ...summary, lastTurnEnd: { seq, at: now, reason: 'completed' } }
-    this.records.set(sessionId, { ...record, activity })
-    this.tick()
-    this.persist()
+    void this.store.update(sessionId, (current) => {
+      if (current === undefined) return null
+      const summary = current.activity
+      const seq = Math.max(summary.lastTurnStartSeq ?? 0, summary.lastTurnEnd?.seq ?? 0) + 1
+      const activity = running
+        ? { ...summary, lastTurnStartSeq: seq, lastTurnStartAt: now }
+        : { ...summary, lastTurnEnd: { seq, at: now, reason: 'completed' } }
+      return { ...current, activity }
+    }).then((written) => {
+      this.afterWrite(sessionId, written)
+      void this.tick()
+    })
   }
 
   async command(sessionId: string, action: CommandAction, context: CommandContext): Promise<CommandResult> {
     const now = Date.now()
-    const current = this.records.get(sessionId) ?? { ...emptyRecord(sessionId, now), activity: EMPTY_ACTIVITY }
-    const facts: TaskFacts = {
-      ...context.facts,
-      pending: context.observedPending === null ? context.facts.pending : known(context.observedPending),
-      summary: current.activity,
-    }
-    let transition: Transition
-    switch (action.kind) {
-      case 'snooze': transition = snooze(current, facts, context.native, action.until, now); break
-      case 'settle': transition = settle(current, facts, context.native, now); break
-      case 'reopen': transition = reopen(current, now); break
-      case 'policy-override': transition = setPolicyOverride(current, action.override, now); break
-    }
     const view = (record: TaskRecord): TaskView => ({ sessionId, record, activity: null, autoSettleDeadline: null, autoSettleSkip: 'policy-off' })
-    if (!transition.ok) return { ok: false, code: transition.code, message: transition.message, task: view(current) }
-    this.records.set(sessionId, transition.record)
-    this.persist()
-    return { ok: true, task: view(transition.record), dataRevision: 0, replayed: false }
+    let outcome: Transition | undefined
+    let base: TaskRecord | undefined
+    // Applied to the record as stored now (inside the cross-tab lock), never to a cached copy.
+    const written = await this.store.update(sessionId, (stored) => {
+      const current = stored ?? { ...emptyRecord(sessionId, now), activity: EMPTY_ACTIVITY }
+      base = current
+      const facts: TaskFacts = {
+        ...context.facts,
+        pending: context.observedPending === null ? context.facts.pending : known(context.observedPending),
+        summary: current.activity,
+      }
+      switch (action.kind) {
+        case 'snooze': outcome = snooze(current, facts, context.native, action.until, now); break
+        case 'settle': outcome = settle(current, facts, context.native, now); break
+        case 'reopen': outcome = reopen(current, now); break
+        case 'policy-override': outcome = setPolicyOverride(current, action.override, now); break
+      }
+      return outcome.ok ? outcome.record : null
+    })
+    if (outcome === undefined || base === undefined) {
+      return { ok: false, code: 'STORAGE_UNAVAILABLE', message: 'local store unavailable', task: null }
+    }
+    if (!outcome.ok) return { ok: false, code: outcome.code, message: outcome.message, task: view(base) }
+    this.afterWrite(sessionId, written)
+    return { ok: true, task: view(outcome.record), dataRevision: 0, replayed: false }
   }
 
   async setPolicy(): Promise<PolicyResult> {
@@ -369,5 +379,6 @@ export class LocalBackend implements TaskBackend {
   dispose(): void {
     clearInterval(this.timer)
     this.channel?.close()
+    globalThis.removeEventListener?.('storage', this.onStorage)
   }
 }

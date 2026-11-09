@@ -15,6 +15,8 @@ interface Spec {
 export class MemoryDomainFacility {
   readonly data = new Map<string, { global: unknown; tables: Map<string, Map<string, unknown>> }>()
   failWrites = false
+  /** Fail only global (bookkeeping) writes, after task writes succeed. */
+  failGlobalWrites = false
   async open(spec: Spec) {
     let unit = this.data.get(spec.name)
     if (unit === undefined) {
@@ -40,7 +42,7 @@ export class MemoryDomainFacility {
       global: {
         get: () => current.global ?? spec.global!.initial,
         set: async (value: unknown) => {
-          if (facility.failWrites) throw new Error('disk full')
+          if (facility.failWrites || facility.failGlobalWrites) throw new Error('disk full')
           current.global = spec.global!.schema.parse(value)
         },
       },

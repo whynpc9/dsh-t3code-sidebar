@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { archivedRows, buildRows, projectGroups, taskSections, type ModelInputs, type SessionRow } from '../../src/client/model.ts'
+import { archivedRows, buildRows, projectGroups, projectRank, taskSections, type ModelInputs, type SessionRow } from '../../src/client/model.ts'
 import type { TaskView } from '../../src/contracts/schema.ts'
 import { emptyRecord } from '../../src/domain/types.ts'
 
@@ -77,5 +77,28 @@ describe('view model', () => {
     const rows = buildRows({ ...base, workspaces: { ...base.workspaces, archivedSessionIds: ['a'] } })
     expect(rows.find(row => row.sessionId === 'a')?.placement).toBeNull()
     expect(archivedRows(rows, { scope: null, query: '', contentHits: null }).map(row => row.sessionId)).toEqual(['a'])
+  })
+})
+
+describe('projectRank', () => {
+  it('orders pinned, attention, working, ordinary active, snoozed, settled', () => {
+    const rows = [
+      { id: 'idle', placement: 'active', status: 'idle' },
+      { id: 'run', placement: 'working', status: 'running' },
+      { id: 'ask', placement: 'active', status: 'approval' },
+      { id: 'pin', placement: 'pinned', status: 'idle' },
+      { id: 'late', placement: 'settled', status: 'idle' },
+      { id: 'snz', placement: 'snoozed', status: 'idle' },
+      { id: 'res', placement: 'active', status: 'new-result' },
+    ] as const
+    const order = [...rows].sort((a, b) => projectRank(a) - projectRank(b)).map(row => row.id)
+    expect(order).toEqual(['pin', 'ask', 'res', 'run', 'idle', 'snz', 'late'])
+  })
+
+  it('places a Working session above an idle Active one inside a project group', () => {
+    const base = inputs()
+    const rows = buildRows({ ...base, status: new Map() })
+    const one = projectGroups(rows, base.workspaces, { scope: 'w1', query: '', contentHits: null }, 'Ungrouped')[0]!
+    expect(one.primary.map(row => row.sessionId)).toEqual(['b', 'a'])
   })
 })

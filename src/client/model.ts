@@ -205,7 +205,19 @@ export interface ProjectGroup {
   readonly later: readonly Row[]
 }
 
-const PROJECT_RANK: Record<Placement, number> = { pinned: 0, active: 1, working: 2, snoozed: 3, settled: 4 }
+/** Statuses that count as an attention event (approval, question, failure, new result). */
+const ATTENTION: ReadonlySet<RowStatus> = new Set<RowStatus>(['approval', 'input', 'attention', 'failed', 'new-result', 'needs-check'])
+
+/** Project-view rank: pinned → Active needing attention → Working → other Active → Snoozed → Settled. */
+export function projectRank(row: Pick<Row, 'placement' | 'status'>): number {
+  switch (row.placement) {
+    case 'pinned': return 0
+    case 'active': return ATTENTION.has(row.status) ? 1 : 3
+    case 'working': return 2
+    case 'snoozed': return 4
+    default: return 5
+  }
+}
 
 /** Workspace groups in Host order, plus an Ungrouped group. */
 export function projectGroups(rows: readonly Row[], workspaces: WorkspacesSnapshot, filter: Filter, ungroupedTitle: string): ProjectGroup[] {
@@ -216,14 +228,8 @@ export function projectGroups(rows: readonly Row[], workspaces: WorkspacesSnapsh
     if (!byWorkspace.has(key)) byWorkspace.set(key, [])
     byWorkspace.get(key)!.push(row)
   }
-  const order = (left: Row, right: Row): number => {
-    const rank = PROJECT_RANK[left.placement!] - PROJECT_RANK[right.placement!]
-    if (rank !== 0) return rank
-    const attention = Number(right.status === 'approval' || right.status === 'input' || right.status === 'failed')
-      - Number(left.status === 'approval' || left.status === 'input' || left.status === 'failed')
-    if (attention !== 0) return attention
-    return comparatorFor(left.placement!)(left.sort, right.sort)
-  }
+  const order = (left: Row, right: Row): number =>
+    (projectRank(left) - projectRank(right)) || comparatorFor(left.placement!)(left.sort, right.sort)
   const group = (workspaceId: string | null, title: string, path: string | null): ProjectGroup => {
     const all = [...(byWorkspace.get(workspaceId) ?? [])].sort(order)
     return {
