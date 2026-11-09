@@ -57,6 +57,19 @@ function atDayOffset(y: number, m: number, d: number, offset: number, hour: numb
   return localInstant(day.getFullYear(), day.getMonth(), day.getDate(), hour)
 }
 
+/**
+ * Parse an `<input type="datetime-local">` value (`YYYY-MM-DDTHH:MM[:SS]`) as
+ * local wall-clock time. Returns null for malformed input and for times that
+ * do not exist locally (a daylight-saving gap), instead of letting `Date`
+ * silently shift them.
+ */
+export function parseLocalDateTime(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(value.trim())
+  if (match === null) return null
+  const [, y, mo, d, h, mi] = match.map(Number) as [number, number, number, number, number, number]
+  return localInstant(y, mo - 1, d, h, mi)
+}
+
 export type SnoozeTimeError = 'past' | 'too-far' | 'invalid'
 
 /**

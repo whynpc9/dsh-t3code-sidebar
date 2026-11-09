@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOUR_MS, localInstant, parseRelative, snoozePresets, validateSnoozeUntil } from '../../src/domain/time.ts'
+import { HOUR_MS, localInstant, parseLocalDateTime, parseRelative, snoozePresets, validateSnoozeUntil } from '../../src/domain/time.ts'
 
 describe('snoozePresets', () => {
   it('orders presets and hides today 18:00 once it passed', () => {
@@ -36,5 +36,14 @@ describe('time validation', () => {
     // America/New_York springs forward 2026-03-08 02:00 → 03:00.
     expect(localInstant(2026, 2, 8, 2, 30)).toBeNull()
     expect(localInstant(2026, 2, 8, 3, 30)).not.toBeNull()
+  })
+})
+
+describe('parseLocalDateTime', () => {
+  it('parses datetime-local values and rejects times inside a DST gap', () => {
+    expect(parseLocalDateTime('2027-03-14T02:30')).toBeNull() // New York springs forward 02:00 → 03:00
+    expect(parseLocalDateTime('2027-03-14T03:30')).toBe(new Date(2027, 2, 14, 3, 30).getTime())
+    expect(parseLocalDateTime('2026-11-20T09:05:00')).toBe(new Date(2026, 10, 20, 9, 5).getTime())
+    expect(parseLocalDateTime('not a date')).toBeNull()
   })
 })

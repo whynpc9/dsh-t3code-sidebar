@@ -120,6 +120,8 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly pendingCache = new Map<string, Known<readonly PendingSignal[]>>()
   /** Sessions with committed events observed live since the last header refresh began. */
   private observedLive = new Set<string>()
+  /** Snooze expiries whose write failed: retry not before `at` (backoff). */
+  private readonly expiryRetry = new Map<string, { readonly failures: number; readonly at: number }>()
   /** Sessions whose event fold could not be persisted; catch-up recovers them. */
   private readonly failedFolds = new Set<string>()
   /** Last activity answer per session and when it was taken. */
@@ -659,7 +661,9 @@ export class T3SidebarService extends TypertRemoteService {
     if (this.disposed || this.domain === undefined) return
     if (this.timer !== undefined) clearTimeout(this.timer)
     const now = Date.now()
-    const delay = sweepDelay(this.fallbackSweepAt, nearestSnoozeDeadline(this.domain.table('tasks').entries(), id => this.nativeOf(id)), now)
+    const delay = sweepDelay(this.fallbackSweepAt, nearestSnoozeDeadline(
+      this.domain.table('tasks').entries(), id => this.nativeOf(id), id => this.expiryRetry.get(id)?.at,
+    ), now)
     this.timer = setTimeout(() => { void this.sweep() }, delay)
   }
 
@@ -676,9 +680,19 @@ export class T3SidebarService extends TypertRemoteService {
       // 1. Snooze expiry (exact deadlines).
       for (const [, record] of [...domain.table('tasks').entries()]) {
         if (record.disposition.kind !== 'snoozed') continue
+        const retry = this.expiryRetry.get(record.sessionId)
+        if (retry !== undefined && now < retry.at) continue
         const native = this.nativeOf(record.sessionId)
         const next = reconcile(record, this.factsOf(record, this.cachedActivity(record), null), native, now)
-        if (next !== null) await this.commit(next, record, 'snooze-expired', null).catch(() => undefined)
+        if (next === null) continue
+        try {
+          await this.commit(next, record, 'snooze-expired', null)
+          this.expiryRetry.delete(record.sessionId)
+        } catch {
+          // Back off so a persistent storage error cannot drive a tight sweep loop.
+          const failures = (retry?.failures ?? 0) + 1
+          this.expiryRetry.set(record.sessionId, { failures, at: now + unknownRetryDelay(failures) })
+        }
       }
       // 2. Re-sample sessions that last reported running work (subagents, jobs,
       //    schedules); their completion emits no event this service folds.
@@ -879,14 +893,18 @@ export function sweepDelay(fallbackAt: number, nearestSnooze: number | null, now
  * their deadlines must not drive the timer or it would spin on a past instant.
  */
 export function nearestSnoozeDeadline(
-  records: Iterable<[string, TaskRecord]>, nativeOf: (sessionId: string) => NativeState,
+  records: Iterable<[string, TaskRecord]>,
+  nativeOf: (sessionId: string) => NativeState,
+  retryAt: (sessionId: string) => number | undefined = () => undefined,
 ): number | null {
   let nearest: number | null = null
   for (const [, record] of records) {
     if (record.disposition.kind !== 'snoozed') continue
     const native = nativeOf(record.sessionId)
     if (native.pinned || native.archived) continue
-    if (nearest === null || record.disposition.until < nearest) nearest = record.disposition.until
+    // A failed expiry write is not retried before its backoff instant.
+    const due = Math.max(record.disposition.until, retryAt(record.sessionId) ?? 0)
+    if (nearest === null || due < nearest) nearest = due
   }
   return nearest
 }

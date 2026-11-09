@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type RefCallback } from 'react'
 import { DAY_MS, type Placement } from '../../domain/types.ts'
-import { snoozePresets, validateSnoozeUntil } from '../../domain/time.ts'
+import { parseLocalDateTime, snoozePresets, validateSnoozeUntil } from '../../domain/time.ts'
 import type { Key } from '../locales.ts'
 import {
   archivedRows, buildRows, currentHiddenByFilter, projectGroups, taskSections,
@@ -438,8 +438,9 @@ function SnoozeDialog({ runtime, sessionId, now }: { runtime: Runtime; sessionId
   const [error, setError] = useState<string | null>(null)
   const close = () => runtime.snoozeRequest.set(null)
   const submit = async () => {
-    const until = new Date(value).getTime()
-    if (Number.isNaN(until) || validateSnoozeUntil(until, now) !== null) { setError(t('snooze.invalid')); return }
+    // Reject wall-clock times that do not exist locally (DST gap) rather than shifting them.
+    const until = parseLocalDateTime(value)
+    if (until === null || validateSnoozeUntil(until, now) !== null) { setError(t('snooze.invalid')); return }
     const result = await runtime.command(sessionId, { kind: 'snooze', until })
     if (result.ok) close()
     else setError(t(`error.${result.code}` as Key) === `error.${result.code}` ? t('error.generic', { code: result.code }) : t(`error.${result.code}` as Key))

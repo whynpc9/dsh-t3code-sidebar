@@ -264,6 +264,22 @@ describe('T3SidebarService', () => {
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('snoozed')
   })
 
+  it('backs off a Snooze expiry whose write fails instead of retrying it every sweep', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service } = await boot(storage)
+    await service.command(command({ action: { kind: 'snooze', until: Date.now() + 40 } }))
+    storage.failTableWrites = true
+    // The service's own deadline timer attempts the expiry and fails.
+    await new Promise(resolve => setTimeout(resolve, 120))
+    const sweep = () => (service as unknown as { sweep(): Promise<void> }).sweep()
+    const retry = (service as unknown as { expiryRetry: Map<string, { failures: number; at: number }> }).expiryRetry.get('s1')
+    expect(retry?.failures).toBe(1)
+    expect(retry!.at - Date.now()).toBeGreaterThan(50_000)
+    await sweep() // within the backoff: not attempted again
+    expect((service as unknown as { expiryRetry: Map<string, { failures: number }> }).expiryRetry.get('s1')?.failures).toBe(1)
+    storage.failTableWrites = false
+  })
+
   it('recovers a settled task whose new-input fold could not be persisted', async () => {
     const storage = new MemoryDomainFacility()
     const { service, host } = await boot(storage, { s1: 'r1', s2: 'r1' })
@@ -307,6 +323,12 @@ describe('nearestSnoozeDeadline', () => {
     ...emptyRecord(id, 0),
     disposition: { kind: 'snoozed', until, setAt: 0, baselinePending: [], baselineTurnEndSeq: null, baselineUserInputAt: null },
   }]
+
+  it('pushes a Snooze whose expiry write failed out to its retry instant', () => {
+    const records = [snoozed('a', 10), snoozed('b', 40)]
+    const live = () => ({ pinned: false, archived: false })
+    expect(nearestSnoozeDeadline(records, live, id => (id === 'a' ? 100 : undefined))).toBe(40)
+  })
 
   it('ignores frozen (pinned or archived) Snoozes so an expired frozen deadline cannot spin the timer', () => {
     const records = [snoozed('pinned', 10), snoozed('archived', 20), snoozed('live', 30)]
