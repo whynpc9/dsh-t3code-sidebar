@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { nearestSnoozeDeadline, T3SidebarService } from '../../src/host/service.ts'
+import { nearestSnoozeDeadline, sweepDelay, T3SidebarService } from '../../src/host/service.ts'
 import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
 import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
@@ -152,6 +152,23 @@ describe('T3SidebarService', () => {
     expect(second.service.listTransitions(10).filter(entry => entry.reason === 'missed-activity')).toHaveLength(2)
   })
 
+  it('samples activity at startup so sessions with background work are published as working', async () => {
+    const host = createFakeHost()
+    host.headers.push({ id: 's1', createdAt: Date.now() - 1000 }, { id: 's2', createdAt: Date.now() - 1000 })
+    host.activity.set('s2', ['job'])
+    await (host.ctx as Context).plugin(T3SidebarService)
+    hosts.push(host)
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(service.getSnapshot(1).tasks).toMatchObject([{ sessionId: 's2', activity: ['job'], record: { revision: 0 } }])
+    // The implicit revision-0 record accepts commands.
+    host.activity.set('s2', [])
+    expect(await service.command(command({ sessionId: 's2', action: { kind: 'settle' } }))).toMatchObject({ ok: true })
+  })
+
   it('re-samples outstanding background activity on the sweep and publishes the change', async () => {
     const { service, host } = await boot()
     host.activity.set('s1', ['subagent'])
@@ -174,5 +191,16 @@ describe('nearestSnoozeDeadline', () => {
     const native = (id: string) => ({ pinned: id === 'pinned', archived: id === 'archived' })
     expect(nearestSnoozeDeadline(records, native)).toBe(30)
     expect(nearestSnoozeDeadline(records.slice(0, 2), native)).toBeNull()
+  })
+})
+
+describe('sweepDelay', () => {
+  it('keeps the fixed fallback instant instead of restarting the interval', () => {
+    const now = 1_000_000
+    const fallbackAt = now + 10_000
+    expect(sweepDelay(fallbackAt, null, now)).toBe(10_005)
+    expect(sweepDelay(fallbackAt, null, now + 9_000)).toBe(1_005)
+    expect(sweepDelay(fallbackAt, now + 2_000, now)).toBe(2_005)
+    expect(sweepDelay(fallbackAt, now - 50, now)).toBe(5)
   })
 })

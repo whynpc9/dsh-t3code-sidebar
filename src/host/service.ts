@@ -117,6 +117,8 @@ export class T3SidebarService extends TypertRemoteService {
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
+  /** Fixed instant of the next fallback sweep; commits never push it later. */
+  private fallbackSweepAt = Date.now() + SWEEP_MS
   private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
   private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
@@ -146,6 +148,21 @@ export class T3SidebarService extends TypertRemoteService {
     this.ctx.effect(() => () => clearInterval(refresh), 't3Sidebar: header refresh')
     // Catch up Snooze expiries and due auto-settles missed while the Host was down.
     void this.sweep()
+    // Learn which sessions already have background work (jobs, subagents,
+    // schedules) so they show as Working and enter the refresh set.
+    void this.seedActivity()
+  }
+
+  /** Sample activity for every known session once, with bounded concurrency. */
+  private async seedActivity(): Promise<void> {
+    const ids = [...this.headers.keys()]
+    for (let index = 0; index < ids.length && !this.disposed; index += ACTIVITY_CONCURRENCY) {
+      await Promise.all(ids.slice(index, index + ACTIVITY_CONCURRENCY).map(async (sessionId) => {
+        if (this.activityCache.has(sessionId)) return
+        const activity = await this.queryActivity(sessionId)
+        if (activity.known && activity.value.length > 0) this.publish([this.viewOf(this.recordOf(sessionId, Date.now()))], null)
+      }))
+    }
   }
 
   // ── Remote surface ────────────────────────────────────────────────────────
@@ -358,12 +375,11 @@ export class T3SidebarService extends TypertRemoteService {
       .map(([sessionId]) => sessionId)
     for (let index = 0; index < outstanding.length; index += ACTIVITY_CONCURRENCY) {
       await Promise.all(outstanding.slice(index, index + ACTIVITY_CONCURRENCY).map(async (sessionId) => {
-        const record = this.domain?.table('tasks').get(sessionId)
-        const before = record === undefined ? null : JSON.stringify(this.cachedActivity(record))
+        if (this.domain === undefined) return
+        const record = this.recordOf(sessionId, Date.now())
+        const before = JSON.stringify(this.cachedActivity(record))
         await this.queryActivity(sessionId)
-        if (record !== undefined && JSON.stringify(this.cachedActivity(record)) !== before) {
-          this.publish([this.viewOf(record)], null)
-        }
+        if (JSON.stringify(this.cachedActivity(record)) !== before) this.publish([this.viewOf(record)], null)
       }))
     }
   }
@@ -524,9 +540,7 @@ export class T3SidebarService extends TypertRemoteService {
     if (this.disposed || this.domain === undefined) return
     if (this.timer !== undefined) clearTimeout(this.timer)
     const now = Date.now()
-    let nearest = now + SWEEP_MS
-    nearest = Math.min(nearest, nearestSnoozeDeadline(this.domain.table('tasks').entries(), id => this.nativeOf(id)) ?? nearest)
-    const delay = Math.min(Math.max(nearest - now, 0) + 5, MAX_TIMER_MS)
+    const delay = sweepDelay(this.fallbackSweepAt, nearestSnoozeDeadline(this.domain.table('tasks').entries(), id => this.nativeOf(id)), now)
     this.timer = setTimeout(() => { void this.sweep() }, delay)
   }
 
@@ -581,6 +595,7 @@ export class T3SidebarService extends TypertRemoteService {
         }))
       }
     }).catch(() => undefined)
+    this.fallbackSweepAt = Date.now() + SWEEP_MS
     this.schedule()
   }
 
@@ -598,8 +613,25 @@ export class T3SidebarService extends TypertRemoteService {
       serverNow: Date.now(),
       capabilities: this.capabilities,
       policy: global.policy,
-      tasks: [...domain.table('tasks').entries()].map(([, record]) => this.viewOf(record)),
+      tasks: this.allViews(),
     }
+  }
+
+  /**
+   * Stored records plus unstored sessions with known background activity (an
+   * unstored session is an implicit revision-0 record; commands against it
+   * use expectedRevision 0).
+   */
+  private allViews(): TaskView[] {
+    const domain = this.requireDomain()
+    const views = [...domain.table('tasks').entries()].map(([, record]) => this.viewOf(record))
+    const stored = new Set(views.map(view => view.sessionId))
+    const now = Date.now()
+    for (const [sessionId, cached] of this.activityCache) {
+      if (stored.has(sessionId) || !this.headers.has(sessionId)) continue
+      if (cached.value.known && cached.value.value.length > 0) views.push(this.viewOf(this.recordOf(sessionId, now)))
+    }
+    return views
   }
 
   private publish(tasks: TaskView[], policy: TimePolicy | null): void {
@@ -680,6 +712,15 @@ export class T3SidebarService extends TypertRemoteService {
   private assertProtocol(version: number): void {
     if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
   }
+}
+
+/**
+ * Delay until the next sweep: the earlier of the fixed fallback instant and
+ * the nearest materializable Snooze deadline (+5 ms so the deadline has passed).
+ */
+export function sweepDelay(fallbackAt: number, nearestSnooze: number | null, now: number): number {
+  const target = nearestSnooze === null ? fallbackAt : Math.min(fallbackAt, nearestSnooze)
+  return Math.min(Math.max(target - now, 0) + 5, MAX_TIMER_MS)
 }
 
 /**
