@@ -1,0 +1,632 @@
+/**
+ * Host half: the `t3Sidebar` task-state service.
+ *
+ * - Persists plugin-owned task records in the `t3_sidebar` storage domain.
+ * - Folds committed `session/event`s into per-session activity summaries.
+ * - Applies revision-checked, idempotent commands through one serial queue.
+ * - Runs the policy scheduler (Snooze expiry + automatic settle).
+ * - Publishes a baseline + ordered deltas to owner Clients.
+ *
+ * Remote methods are dispatched by the Gateway's SRC marker path; every
+ * argument is validated with the protocol zod schemas before use.
+ */
+import { Service, type Context } from '@deepseek-ai/cordis'
+import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
+import { z } from 'zod'
+import {
+  CommandInputSchema, PolicyInputSchema, PROTOCOL_VERSION, TaskRecordSchema, TimePolicySchema, TransitionSchema,
+  type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type PolicyResult, type Snapshot,
+  type TaskView, type TransitionEntry,
+} from '../contracts/schema.ts'
+import { NAMESPACE, SERVICE_KEY } from '../contracts/remote.ts'
+import { decideAutoSettle } from '../domain/autosettle.ts'
+import {
+  autoSettle, foldActivity, reconcile, reopen, setPolicyOverride, settle, snooze,
+  type FoldableEvent, type TaskErrorCode, type Transition,
+} from '../domain/commands.ts'
+import {
+  DEFAULT_AUTO_SETTLE_DAYS, emptyRecord, known, unknown,
+  type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
+} from '../domain/types.ts'
+import {
+  optionalService,
+  type HostLiveSessions, type HostSession, type HostSessionActivity, type HostSessionEvent, type HostSessionHeader,
+  type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
+} from './harness.ts'
+
+const GlobalSchema = z.object({
+  installationId: z.string(),
+  installedAt: z.number(),
+  dataRevision: z.number(),
+  policy: TimePolicySchema,
+  /** Grace start applied to every session when the policy was (re)enabled or shortened. */
+  policyEligibleSince: z.number(),
+})
+type GlobalState = z.infer<typeof GlobalSchema>
+
+const NOT_INSTALLED: GlobalState = {
+  installationId: '',
+  installedAt: 0,
+  dataRevision: 0,
+  policy: { revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false },
+  policyEligibleSince: 0,
+}
+
+export const TASK_DOMAIN = defineDomain({
+  name: 't3_sidebar',
+  version: 1,
+  global: { schema: GlobalSchema, initial: NOT_INSTALLED },
+  tables: {
+    tasks: domainTable(TaskRecordSchema),
+    transitions: domainTable(TransitionSchema),
+  },
+})
+
+const SWEEP_MS = 60_000
+const HEADER_REFRESH_MS = 10 * 60_000
+const MAX_TIMER_MS = 2 ** 31 - 1
+const RECEIPTS_PER_RECORD = 16
+const TRANSITIONS_MAX = 1000
+const FOLLOW_BUFFER = 1000
+const ACTIVITY_CONCURRENCY = 2
+
+type Domain = OpenDomain<TaskRecord, TransitionEntry, GlobalState>
+
+interface Follower {
+  readonly push: (event: FollowEvent) => void
+  readonly close: (error?: Error) => void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    t3Sidebar: T3SidebarService
+  }
+}
+
+const randomId = (): string => globalThis.crypto.randomUUID()
+
+/** Serializes async jobs; a failed job does not poison the queue. */
+class SerialQueue {
+  private tail: Promise<unknown> = Promise.resolve()
+  run<T>(job: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(job, job)
+    this.tail = result.catch(() => undefined)
+    return result
+  }
+}
+
+export class T3SidebarService extends TypertRemoteService {
+  static inject = ['storageDomain']
+
+  private domain: Domain | undefined
+  private readonly queue = new SerialQueue()
+  private readonly epoch = randomId()
+  private streamSeq = 0
+  private readonly followers = new Set<Follower>()
+  private readonly headers = new Map<string, HostSessionHeader>()
+  /** Last activity answer per session and when it was taken. */
+  private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number }>()
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>()
+  private disposed = false
+  private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
+
+  constructor(ctx: Context) {
+    super(ctx, SERVICE_KEY, { namespace: NAMESPACE })
+  }
+
+  protected async [Service.init](): Promise<void> {
+    this.domain = await (this.ctx.storageDomain as { open(spec: unknown): Promise<Domain> }).open(TASK_DOMAIN)
+    const global = this.domain.global.get()
+    if (global.installationId === '') {
+      const now = Date.now()
+      await this.domain.global.set({ ...NOT_INSTALLED, installationId: randomId(), installedAt: now, policyEligibleSince: now })
+    }
+    this.capabilities = {
+      hostActivity: true,
+      sessionEvents: true,
+      hostPending: false,
+    }
+    this.ctx.on('session/event', (session: HostSession, event: HostSessionEvent) => {
+      this.onSessionEvent(session, event)
+    })
+    this.ctx.effect(() => () => this.dispose(), 't3Sidebar: scheduler and followers')
+    await this.refreshHeaders()
+    const refresh = setInterval(() => { void this.refreshHeaders() }, HEADER_REFRESH_MS)
+    this.ctx.effect(() => () => clearInterval(refresh), 't3Sidebar: header refresh')
+    // Catch up Snooze expiries and due auto-settles missed while the Host was down.
+    void this.sweep()
+  }
+
+  // ── Remote surface ────────────────────────────────────────────────────────
+
+  @Remote('getSnapshot')
+  getSnapshot(t3ProtocolVersion: number): Snapshot {
+    this.assertProtocol(t3ProtocolVersion)
+    return this.snapshot()
+  }
+
+  @Remote({ name: 'follow', mode: 'stream' })
+  follow(t3ProtocolVersion: number, signal: AbortSignal): AsyncIterable<FollowEvent> {
+    this.assertProtocol(t3ProtocolVersion)
+    return this.openFollow(signal)
+  }
+
+  @Remote('command')
+  async command(t3CommandInput: unknown): Promise<CommandResult> {
+    const parsed = CommandInputSchema.safeParse(t3CommandInput)
+    if (!parsed.success) return { ok: false, code: 'PROTOCOL_MISMATCH', message: parsed.error.message, task: null }
+    if (parsed.data.protocolVersion !== PROTOCOL_VERSION) {
+      return { ok: false, code: 'PROTOCOL_MISMATCH', message: `protocol ${parsed.data.protocolVersion} unsupported`, task: null }
+    }
+    return await this.queue.run(() => this.applyCommand(parsed.data))
+  }
+
+  @Remote('setPolicy')
+  async setPolicy(t3PolicyInput: unknown): Promise<PolicyResult> {
+    const parsed = PolicyInputSchema.safeParse(t3PolicyInput)
+    const domain = this.requireDomain()
+    if (!parsed.success) {
+      return { ok: false, code: 'PROTOCOL_MISMATCH', message: parsed.error.message, policy: domain.global.get().policy }
+    }
+    return await this.queue.run(async () => {
+      const global = domain.global.get()
+      if (parsed.data.expectedRevision !== global.policy.revision) {
+        return { ok: false, code: 'CONFLICT', message: 'policy changed', policy: global.policy }
+      }
+      const before = global.policy
+      const policy: TimePolicy = {
+        revision: before.revision + 1,
+        autoSettleAfterDays: parsed.data.autoSettleAfterDays,
+        keepUnacknowledgedFailures: parsed.data.keepUnacknowledgedFailures,
+      }
+      // Enabling or shortening the window starts a new grace period for everyone.
+      const fresh = policy.autoSettleAfterDays !== null
+        && (before.autoSettleAfterDays === null || policy.autoSettleAfterDays < before.autoSettleAfterDays)
+      const next: GlobalState = {
+        ...global,
+        policy,
+        dataRevision: global.dataRevision + 1,
+        policyEligibleSince: fresh ? Date.now() : global.policyEligibleSince,
+      }
+      await domain.global.set(next)
+      this.publish([], policy)
+      this.schedule()
+      return { ok: true, policy }
+    })
+  }
+
+  @Remote('listTransitions')
+  listTransitions(t3Limit: number): TransitionEntry[] {
+    const n = z.number().int().min(1).max(TRANSITIONS_MAX).parse(t3Limit)
+    return [...this.requireDomain().table('transitions').entries()]
+      .map(([, entry]) => entry)
+      .sort((left, right) => right.at - left.at)
+      .slice(0, n)
+  }
+
+  // ── Commands ──────────────────────────────────────────────────────────────
+
+  private async applyCommand(input: CommandInput): Promise<CommandResult> {
+    const domain = this.requireDomain()
+    const now = Date.now()
+    if (!this.sessionKnown(input.sessionId)) {
+      return { ok: false, code: 'NOT_FOUND', message: 'unknown session', task: null }
+    }
+    const current = this.recordOf(input.sessionId, now)
+    const digest = JSON.stringify(input.action)
+    const receipt = current.receipts.find(entry => entry.commandId === input.commandId)
+    if (receipt !== undefined) {
+      if (receipt.digest !== digest) {
+        return { ok: false, code: 'CONFLICT', message: 'command id reused with another payload', task: this.viewOf(current) }
+      }
+      return { ok: true, task: this.viewOf(current), dataRevision: domain.global.get().dataRevision, replayed: true }
+    }
+    if (input.expectedRevision !== current.revision) {
+      return { ok: false, code: 'CONFLICT', message: 'task changed', task: this.viewOf(current) }
+    }
+    const native = this.nativeOf(input.sessionId)
+    const activity = await this.queryActivity(input.sessionId)
+    const facts = this.factsOf(current, activity, input.observedPending)
+    let transition: Transition
+    switch (input.action.kind) {
+      case 'snooze': transition = snooze(current, facts, native, input.action.until, now); break
+      case 'settle': transition = settle(current, facts, native, now); break
+      case 'reopen': transition = reopen(current, now); break
+      case 'policy-override': transition = setPolicyOverride(current, input.action.override, now); break
+    }
+    if (!transition.ok) {
+      return { ok: false, code: transition.code satisfies TaskErrorCode, message: transition.message, task: this.viewOf(current) }
+    }
+    const record: TaskRecord = {
+      ...transition.record,
+      receipts: [...current.receipts, { commandId: input.commandId, revision: transition.record.revision, digest }]
+        .slice(-RECEIPTS_PER_RECORD),
+    }
+    try {
+      await this.commit(record, current, `manual:${input.action.kind}`, null)
+    } catch (error) {
+      return { ok: false, code: 'STORAGE_UNAVAILABLE', message: String(error), task: this.viewOf(current) }
+    }
+    return { ok: true, task: this.viewOf(record), dataRevision: domain.global.get().dataRevision, replayed: false }
+  }
+
+  /** Persist first, then publish; audit entries carry no message content. */
+  private async commit(
+    record: TaskRecord, before: TaskRecord, reason: string,
+    audit: { anchorAt: number; deadline: number; policyRevision: number } | null,
+  ): Promise<void> {
+    const domain = this.requireDomain()
+    await domain.table('tasks').put(record.sessionId, record)
+    const global = domain.global.get()
+    await domain.global.set({ ...global, dataRevision: global.dataRevision + 1 })
+    if (before.disposition.kind !== record.disposition.kind) {
+      await this.appendTransition({
+        id: randomId(),
+        at: Date.now(),
+        sessionId: record.sessionId,
+        from: before.disposition.kind,
+        to: record.disposition.kind,
+        reason,
+        policyRevision: audit?.policyRevision ?? null,
+        anchorAt: audit?.anchorAt ?? null,
+        deadline: audit?.deadline ?? null,
+      })
+    }
+    this.publish([this.viewOf(record)], null)
+    this.schedule()
+  }
+
+  private async appendTransition(entry: TransitionEntry): Promise<void> {
+    const table = this.requireDomain().table('transitions')
+    await table.put(entry.id, entry)
+    const all = [...table.entries()]
+    if (all.length > TRANSITIONS_MAX) {
+      const oldest = all.sort((left, right) => left[1].at - right[1].at).slice(0, all.length - TRANSITIONS_MAX)
+      for (const [id] of oldest) await table.delete(id)
+    }
+  }
+
+  // ── Facts ─────────────────────────────────────────────────────────────────
+
+  private recordOf(sessionId: string, now: number): TaskRecord {
+    const stored = this.domain?.table('tasks').get(sessionId)
+    if (stored !== undefined) return stored
+    return emptyRecord(sessionId, this.requireDomain().global.get().policyEligibleSince || now)
+  }
+
+  private sessionKnown(sessionId: string): boolean {
+    if (this.headers.has(sessionId)) return true
+    const live = optionalService<HostLiveSessions>(this.ctx, 'sessions')
+    return live?.list().some(entry => entry.header.id === sessionId) ?? false
+  }
+
+  private nativeOf(sessionId: string): NativeState {
+    const registry = optionalService<HostWorkspaceRegistry>(this.ctx, 'workspaceRegistry')
+    return {
+      pinned: registry?.pinnedSessionIds.includes(sessionId) ?? false,
+      archived: registry?.archivedSessionIds.includes(sessionId) ?? false,
+    }
+  }
+
+  /** Ask every composed provider what still runs for the session (turn, subagent, job, schedule). */
+  private async queryActivity(sessionId: string): Promise<Known<readonly string[]>> {
+    try {
+      const waterfall = (this.ctx as unknown as {
+        waterfall(name: string, request: unknown, next: () => Promise<readonly HostSessionActivity[]>): Promise<readonly HostSessionActivity[]>
+      }).waterfall
+      const at = Date.now()
+      const activity = await waterfall.call(this.ctx, 'workspace/session-activity', { sessionId }, () => Promise.resolve([]))
+      const value = known(activity.map(entry => entry.kind))
+      this.activityCache.set(sessionId, { value, at })
+      return value
+    } catch {
+      this.activityCache.set(sessionId, { value: unknown, at: Date.now() })
+      return unknown
+    }
+  }
+
+  /**
+   * Cached activity, corrected by the journal: `turn/end` is emitted while the
+   * Agent is still unwinding its turn, so a `turn` entry sampled before the
+   * latest turn end is stale.
+   */
+  private cachedActivity(record: TaskRecord): Known<readonly string[]> {
+    const cached = this.activityCache.get(record.sessionId)
+    if (cached === undefined || !cached.value.known) return cached?.value ?? unknown
+    const end = record.activity.lastTurnEnd
+    const start = record.activity.lastTurnStartSeq
+    const turnClosed = end !== null && (start === null || end.seq > start)
+    if (turnClosed && end.at >= cached.at - 50) return known(cached.value.value.filter(kind => kind !== 'turn'))
+    return cached.value
+  }
+
+  /** Re-sample activity once the Agent has finished unwinding a turn. */
+  private refreshActivitySoon(sessionId: string): void {
+    for (const delay of [400, 2500]) {
+      const timer = setTimeout(() => {
+        this.pendingTimers.delete(timer)
+        if (this.disposed || this.domain === undefined) return
+        const before = JSON.stringify(this.cachedActivity(this.recordOf(sessionId, Date.now())))
+        void this.queryActivity(sessionId).then(() => {
+          const record = this.domain?.table('tasks').get(sessionId)
+          if (record === undefined) return
+          if (JSON.stringify(this.cachedActivity(record)) !== before) this.publish([this.viewOf(record)], null)
+        })
+      }, delay)
+      this.pendingTimers.add(timer)
+    }
+  }
+
+  /**
+   * Host facts. Interactive waits (approvals, blocking questions) happen inside
+   * a turn, so a known-empty activity list also proves "nothing pending" for
+   * the Host's purposes; Client-observed pending signals are added as a lower bound.
+   */
+  private factsOf(
+    record: TaskRecord, activity: Known<readonly string[]>, observedPending: readonly PendingSignal[] | null,
+  ): TaskFacts {
+    const running: Known<boolean> = activity.known ? known(activity.value.includes('turn')) : unknown
+    let pending: Known<readonly PendingSignal[]>
+    if (observedPending !== null) pending = known(observedPending)
+    else if (activity.known && !activity.value.includes('turn')) pending = known([])
+    else pending = unknown
+    return { running, activity, pending, summary: record.activity }
+  }
+
+  private viewOf(record: TaskRecord): TaskView {
+    const global = this.requireDomain().global.get()
+    const activity = this.cachedActivity(record)
+    const header = this.headers.get(record.sessionId)
+    let autoSettleDeadline: number | null = null
+    let autoSettleSkip: string | null = null
+    if (header !== undefined) {
+      const decision = decideAutoSettle({
+        policy: global.policy,
+        record: this.withGlobalGrace(record, global),
+        facts: this.factsOf(record, activity, null),
+        native: this.nativeOf(record.sessionId),
+        createdAt: header.createdAt,
+        now: Date.now(),
+      })
+      autoSettleDeadline = decision.deadline
+      autoSettleSkip = decision.skip
+    }
+    return {
+      sessionId: record.sessionId,
+      record,
+      activity: activity.known ? [...activity.value] : null,
+      autoSettleDeadline,
+      autoSettleSkip,
+    }
+  }
+
+  private withGlobalGrace(record: TaskRecord, global: GlobalState): TaskRecord {
+    return record.policyEligibleSince >= global.policyEligibleSince
+      ? record
+      : { ...record, policyEligibleSince: global.policyEligibleSince }
+  }
+
+  private async refreshHeaders(): Promise<void> {
+    const persistence = optionalService<HostSessionPersistence>(this.ctx, 'sessionPersistence')
+    const live = optionalService<HostLiveSessions>(this.ctx, 'sessions')
+    try {
+      const stored = persistence === undefined ? [] : await persistence.list()
+      for (const { header } of stored) this.rememberHeader(header)
+    } catch {
+      // Storage faults never imply "no sessions"; keep what we already know.
+    }
+    for (const { header } of live?.list() ?? []) this.rememberHeader(header)
+  }
+
+  private rememberHeader(header: HostSessionHeader): void {
+    if (header.origin === 'subagent') return
+    this.headers.set(header.id, header)
+  }
+
+  // ── Events ────────────────────────────────────────────────────────────────
+
+  private onSessionEvent(session: HostSession, event: HostSessionEvent): void {
+    if (this.disposed || this.domain === undefined) return
+    const foldable = toFoldable(event)
+    if (foldable === null) return
+    if (session.header !== undefined) this.rememberHeader(session.header)
+    const sessionId = session.id
+    if (!this.headers.has(sessionId)) return
+    void this.queue.run(async () => {
+      const now = Date.now()
+      const before = this.recordOf(sessionId, now)
+      const activity = foldActivity(before.activity, foldable)
+      if (activity === before.activity) return
+      let record: TaskRecord = { ...before, activity, revision: before.revision + 1 }
+      if (event.type !== 'user/message') await this.queryActivity(sessionId)
+      if (event.type === 'turn/end') this.refreshActivitySoon(sessionId)
+      const facts = this.factsOf(record, this.cachedActivity(record), null)
+      record = reconcile(record, facts, this.nativeOf(sessionId), now) ?? record
+      await this.commit(record, before, `activity:${event.type}`, null).catch(() => undefined)
+    })
+  }
+
+  // ── Scheduler ─────────────────────────────────────────────────────────────
+
+  /** Single timer to the nearest deadline, with a 60 s fallback sweep. */
+  private schedule(): void {
+    if (this.disposed || this.domain === undefined) return
+    if (this.timer !== undefined) clearTimeout(this.timer)
+    const now = Date.now()
+    let nearest = now + SWEEP_MS
+    for (const [, record] of this.domain.table('tasks').entries()) {
+      if (record.disposition.kind === 'snoozed') nearest = Math.min(nearest, record.disposition.until)
+    }
+    const delay = Math.min(Math.max(nearest - now, 0) + 5, MAX_TIMER_MS)
+    this.timer = setTimeout(() => { void this.sweep() }, delay)
+  }
+
+  /** Materialize Snooze expiries and commit due automatic settles. */
+  private async sweep(): Promise<void> {
+    if (this.disposed || this.domain === undefined) return
+    await this.queue.run(async () => {
+      const domain = this.requireDomain()
+      const now = Date.now()
+      const global = domain.global.get()
+      // 1. Snooze expiry (exact deadlines).
+      for (const [, record] of [...domain.table('tasks').entries()]) {
+        if (record.disposition.kind !== 'snoozed') continue
+        const native = this.nativeOf(record.sessionId)
+        const next = reconcile(record, this.factsOf(record, this.cachedActivity(record), null), native, now)
+        if (next !== null) await this.commit(next, record, 'snooze-expired', null).catch(() => undefined)
+      }
+      // 2. Automatic settle: time pre-filter first, then fresh activity facts for due candidates.
+      if (global.policy.autoSettleAfterDays === null) return
+      const due: { record: TaskRecord; header: HostSessionHeader }[] = []
+      for (const header of this.headers.values()) {
+        const record = this.withGlobalGrace(this.recordOf(header.id, now), global)
+        if (record.disposition.kind !== 'normal') continue
+        const timeOnly = decideAutoSettle({
+          policy: global.policy,
+          record,
+          facts: { running: known(false), activity: known([]), pending: known([]), summary: record.activity },
+          native: { pinned: false, archived: false },
+          createdAt: header.createdAt,
+          now,
+        })
+        if (timeOnly.eligible) due.push({ record, header })
+      }
+      for (let index = 0; index < due.length; index += ACTIVITY_CONCURRENCY) {
+        const batch = due.slice(index, index + ACTIVITY_CONCURRENCY)
+        await Promise.all(batch.map(async ({ record, header }) => {
+          const activity = await this.queryActivity(record.sessionId)
+          const facts = this.factsOf(record, activity, null)
+          const native = this.nativeOf(record.sessionId)
+          const decision = decideAutoSettle({ policy: global.policy, record, facts, native, createdAt: header.createdAt, now: Date.now() })
+          if (!decision.eligible || decision.deadline === null) return
+          const stored = this.recordOf(record.sessionId, now)
+          const settled = autoSettle(stored, facts, Date.now(), {
+            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: global.policy.revision,
+          })
+          await this.commit(settled, stored, 'idle-timeout', {
+            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: global.policy.revision,
+          }).catch(() => undefined)
+        }))
+      }
+    }).catch(() => undefined)
+    this.schedule()
+  }
+
+  // ── Follow stream ─────────────────────────────────────────────────────────
+
+  private snapshot(): Snapshot {
+    const domain = this.requireDomain()
+    const global = domain.global.get()
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      installationId: global.installationId,
+      epoch: this.epoch,
+      streamSeq: this.streamSeq,
+      dataRevision: global.dataRevision,
+      serverNow: Date.now(),
+      capabilities: this.capabilities,
+      policy: global.policy,
+      tasks: [...domain.table('tasks').entries()].map(([, record]) => this.viewOf(record)),
+    }
+  }
+
+  private publish(tasks: TaskView[], policy: TimePolicy | null): void {
+    this.streamSeq += 1
+    const global = this.requireDomain().global.get()
+    const event: FollowEvent = {
+      kind: 'delta',
+      epoch: this.epoch,
+      streamSeq: this.streamSeq,
+      dataRevision: global.dataRevision,
+      serverNow: Date.now(),
+      tasks,
+      policy,
+    }
+    for (const follower of this.followers) follower.push(event)
+  }
+
+  private openFollow(signal: AbortSignal): AsyncIterable<FollowEvent> {
+    const buffer: FollowEvent[] = []
+    let wake: (() => void) | undefined
+    let closed: Error | null | undefined
+    const follower: Follower = {
+      push: (event) => {
+        if (buffer.length >= FOLLOW_BUFFER) { follower.close(new Error('follower fell behind; resubscribe for a new baseline')); return }
+        buffer.push(event)
+        wake?.()
+      },
+      close: (error) => {
+        closed = error ?? null
+        this.followers.delete(follower)
+        wake?.()
+      },
+    }
+    // Subscribe before taking the baseline so no delta falls into the gap.
+    this.followers.add(follower)
+    buffer.push({ kind: 'baseline', snapshot: this.snapshot() })
+    signal.addEventListener('abort', () => follower.close(), { once: true })
+    return {
+      [Symbol.asyncIterator]: () => ({
+        next: async (): Promise<IteratorResult<FollowEvent>> => {
+          for (;;) {
+            const event = buffer.shift()
+            if (event !== undefined) return { done: false, value: event }
+            if (closed !== undefined) {
+              if (closed !== null) throw closed
+              return { done: true, value: undefined }
+            }
+            await new Promise<void>((resolve) => { wake = resolve })
+            wake = undefined
+          }
+        },
+        return: async (): Promise<IteratorResult<FollowEvent>> => {
+          follower.close()
+          return { done: true, value: undefined }
+        },
+      }),
+    }
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  private dispose(): void {
+    this.disposed = true
+    if (this.timer !== undefined) clearTimeout(this.timer)
+    for (const timer of this.pendingTimers) clearTimeout(timer)
+    this.pendingTimers.clear()
+    for (const follower of [...this.followers]) follower.close()
+    const domain = this.domain
+    this.domain = undefined
+    void this.queue.run(async () => { await domain?.close() })
+  }
+
+  private requireDomain(): Domain {
+    if (this.domain === undefined) throw new Error('t3Sidebar: storage is not open')
+    return this.domain
+  }
+
+  private assertProtocol(version: number): void {
+    if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
+  }
+}
+
+/** Reduce a committed session event to what the activity summary folds. */
+function toFoldable(event: HostSessionEvent): FoldableEvent | null {
+  const data = event.data as Record<string, unknown> | undefined
+  switch (event.type) {
+    case 'turn/start':
+      return { type: 'turn/start', seq: event.seq, time: event.time }
+    case 'turn/end': {
+      const reason = (data?.reason as { kind?: unknown } | undefined)?.kind
+      return { type: 'turn/end', seq: event.seq, time: event.time, reason: typeof reason === 'string' ? reason : 'unknown' }
+    }
+    case 'user/message': {
+      const source = (data?.source as { kind?: unknown } | undefined)?.kind
+      return { type: 'user/message', seq: event.seq, time: event.time, human: source === 'user' }
+    }
+    default:
+      return null
+  }
+}
