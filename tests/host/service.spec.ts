@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { nearestSnoozeDeadline, sweepDelay, T3SidebarService } from '../../src/host/service.ts'
+import { nearestSnoozeDeadline, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
 import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
 import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
@@ -169,6 +169,18 @@ describe('T3SidebarService', () => {
     expect(await service.command(command({ sessionId: 's2', action: { kind: 'settle' } }))).toMatchObject({ ok: true })
   })
 
+  it('retries a failed activity answer on a later sweep instead of dropping the session', async () => {
+    const { service, host } = await boot()
+    host.activity.set('s1', ['job'])
+    await service.command(command({ action: { kind: 'reopen' } }))
+    expect(service.getSnapshot(1).tasks[0]?.activity).toEqual(['job'])
+    const cache = (service as unknown as { activityCache: Map<string, { value: unknown; at: number; failures: number }> }).activityCache
+    cache.set('s1', { value: { known: false }, at: Date.now() - 2 * 60_000, failures: 1 })
+    expect(service.getSnapshot(1).tasks[0]?.activity).toBeNull()
+    await (service as unknown as { sweep(): Promise<void> }).sweep()
+    expect(service.getSnapshot(1).tasks[0]?.activity).toEqual(['job'])
+  })
+
   it('re-samples outstanding background activity on the sweep and publishes the change', async () => {
     const { service, host } = await boot()
     host.activity.set('s1', ['subagent'])
@@ -202,5 +214,11 @@ describe('sweepDelay', () => {
     expect(sweepDelay(fallbackAt, null, now + 9_000)).toBe(1_005)
     expect(sweepDelay(fallbackAt, now + 2_000, now)).toBe(2_005)
     expect(sweepDelay(fallbackAt, now - 50, now)).toBe(5)
+  })
+})
+
+describe('unknownRetryDelay', () => {
+  it('backs off from one minute and caps at thirty', () => {
+    expect([1, 2, 3, 6, 20].map(unknownRetryDelay)).toEqual([60_000, 120_000, 240_000, 1_800_000, 1_800_000])
   })
 })

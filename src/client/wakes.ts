@@ -6,13 +6,7 @@
  */
 import type { TaskView } from '../contracts/schema.ts'
 import { wakeReason } from '../domain/placement.ts'
-import { known, type NativeState, type TaskFacts } from '../domain/types.ts'
-
-/**
- * Compare requests by key only: the same open question can surface as the live
- * interaction or as a durable ask, and a change of source is not a new request.
- */
-const byKey = (id: string): string => `request:${id.slice(id.indexOf(':') + 1)}`
+import type { NativeState, TaskFacts } from '../domain/types.ts'
 
 export interface PendingWake {
   readonly sessionId: string
@@ -31,11 +25,8 @@ export function browserObservedWakes(
     const live = factsFor(sessionId)
     if (live === null || live.native.pinned || live.native.archived) continue
     // Expiry, failures and human input are Host-detected; only new requests are browser-only.
-    const pending = live.facts.pending.known
-      ? known(live.facts.pending.value.map(signal => ({ ...signal, source: 'request' })))
-      : live.facts.pending
-    const normalized = { ...disposition, baselinePending: disposition.baselinePending.map(byKey) }
-    if (wakeReason(normalized, { ...live.facts, pending, summary: view.record.activity }, now) === 'new-pending') {
+    // Same rule as placement (key-only request identity), so display and durable state agree.
+    if (wakeReason(disposition, { ...live.facts, summary: view.record.activity }, now) === 'new-pending') {
       wakes.push({ sessionId, revision: view.record.revision })
     }
   }

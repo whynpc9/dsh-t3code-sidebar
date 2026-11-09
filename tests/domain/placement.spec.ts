@@ -79,6 +79,13 @@ describe('Snooze', () => {
     expect(reconcile(r, typed, native, T0 + 5)?.disposition.kind).toBe('normal')
   })
 
+  it('a known question that switches source (durable ask → live) is not a new request', () => {
+    const r = snoozed()
+    const moved = facts({ pending: [{ source: 'live', key: question.key, kind: 'user-question' }] })
+    expect(derivePlacement(moved, r, native, T0 + 1)).toBe('snoozed')
+    expect(reconcile(r, moved, native, T0 + 1)).toBeNull()
+  })
+
   it('pin masks the snooze without clearing it; unpin brings it back', () => {
     const r = snoozed()
     expect(derivePlacement(base, r, { pinned: true, archived: false }, T0 + 1)).toBe('pinned')

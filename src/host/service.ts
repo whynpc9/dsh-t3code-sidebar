@@ -115,7 +115,7 @@ export class T3SidebarService extends TypertRemoteService {
   /** Sessions whose committed events this process folded since the last header refresh. */
   private readonly observedLive = new Set<string>()
   /** Last activity answer per session and when it was taken. */
-  private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number }>()
+  private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
   /** Fixed instant of the next fallback sweep; commits never push it later. */
   private fallbackSweepAt = Date.now() + SWEEP_MS
@@ -345,10 +345,11 @@ export class T3SidebarService extends TypertRemoteService {
       const at = Date.now()
       const activity = await waterfall.call(this.ctx, 'workspace/session-activity', { sessionId }, () => Promise.resolve([]))
       const value = known(activity.map(entry => entry.kind))
-      this.activityCache.set(sessionId, { value, at })
+      this.activityCache.set(sessionId, { value, at, failures: 0 })
       return value
     } catch {
-      this.activityCache.set(sessionId, { value: unknown, at: Date.now() })
+      const failures = (this.activityCache.get(sessionId)?.failures ?? 0) + 1
+      this.activityCache.set(sessionId, { value: unknown, at: Date.now(), failures })
       return unknown
     }
   }
@@ -370,8 +371,12 @@ export class T3SidebarService extends TypertRemoteService {
 
   /** Re-query every session whose cached activity is non-empty; publish changed views. */
   private async refreshOutstandingActivity(): Promise<void> {
+    const now = Date.now()
     const outstanding = [...this.activityCache]
-      .filter(([, cached]) => cached.value.known && cached.value.value.length > 0)
+      .filter(([, cached]) => cached.value.known
+        ? cached.value.value.length > 0
+        // Failed answers are retried with backoff instead of being dropped.
+        : now >= cached.at + unknownRetryDelay(cached.failures))
       .map(([sessionId]) => sessionId)
     for (let index = 0; index < outstanding.length; index += ACTIVITY_CONCURRENCY) {
       await Promise.all(outstanding.slice(index, index + ACTIVITY_CONCURRENCY).map(async (sessionId) => {
@@ -712,6 +717,11 @@ export class T3SidebarService extends TypertRemoteService {
   private assertProtocol(version: number): void {
     if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
   }
+}
+
+/** Backoff before re-asking a provider that failed `failures` times: 1 min doubling, capped at 30 min. */
+export function unknownRetryDelay(failures: number): number {
+  return Math.min(SWEEP_MS * 2 ** Math.max(0, failures - 1), 30 * SWEEP_MS)
 }
 
 /**

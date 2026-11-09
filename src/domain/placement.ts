@@ -10,15 +10,23 @@ export type WakeReason = 'expired' | 'new-pending' | 'new-failure' | 'user-input
 /** Why an effective Settled no longer holds. */
 export type ReopenReason = 'user-input' | 'new-turn' | 'new-pending'
 
+/**
+ * Requests compare by key only: the same open question can surface as the
+ * live interaction or as a durable ask, and a change of source is not a new
+ * request. Stored baselines keep `source:key` and are normalized here.
+ */
 const newPendingKeys = (facts: TaskFacts, baseline: readonly string[]): boolean => {
   if (!facts.pending.known) return false
-  const seen = new Set(baseline)
-  return facts.pending.value.some(signal => !seen.has(pendingId(signal)))
+  const seen = new Set(baseline.map(requestKeyOf))
+  return facts.pending.value.some(signal => !seen.has(signal.key))
 }
 
-/** Stable identity of a pending signal, scoped by its source. */
+/** Stable identity of a pending signal as stored in baselines (`source:key`). */
 export const pendingId = (signal: { readonly source: string; readonly key: string }): string =>
   `${signal.source}:${signal.key}`
+
+/** The request key of a stored baseline identity. */
+export const requestKeyOf = (id: string): string => id.slice(id.indexOf(':') + 1)
 
 /**
  * Whether a Snooze has ended, and why. Ordinary successful completion and
