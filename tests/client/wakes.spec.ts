@@ -93,4 +93,15 @@ describe('WakeDispatcher', () => {
     gone.timers[0]!.task(); await flush()
     expect(gone.sent).toEqual(['s1'])
   })
+
+  it('keeps retrying every failed wake when several fail during the same outage', async () => {
+    const { dispatcher, sent, timers } = harness([fail('STORAGE_UNAVAILABLE'), fail('STORAGE_UNAVAILABLE'), ok, ok])
+    const other = { sessionId: 's2', revision: 7 }
+    dispatcher.sync([wake, other])
+    await flush()
+    expect(timers).toHaveLength(2)
+    timers[0]!.task(); await flush()
+    timers[1]!.task(); await flush()
+    expect(sent).toEqual(['s1', 's2', 's1', 's2'])
+  })
 })

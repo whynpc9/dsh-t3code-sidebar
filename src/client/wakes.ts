@@ -33,6 +33,8 @@ export function browserObservedWakes(
   return wakes
 }
 
+const keyOf = (wake: PendingWake): string => `${wake.sessionId}:${wake.revision}`
+
 /** Outcomes worth retrying: the wake may succeed once storage/transport recovers. */
 const TRANSIENT = new Set(['STORAGE_UNAVAILABLE', 'BASELINE_PENDING'])
 
@@ -57,17 +59,20 @@ export class WakeDispatcher {
     private readonly schedule: Scheduler = (task, delayMs) => { const id = setTimeout(task, delayMs); return () => clearTimeout(id) },
   ) {}
 
+  /** Replace the set of wanted wakes and send any that are not yet handled. */
   sync(wakes: readonly PendingWake[]): void {
     this.latest = wakes
-    for (const wake of wakes) {
-      const key = `${wake.sessionId}:${wake.revision}`
-      if (this.settled.has(key) || this.inFlight.has(key) || this.timers.has(key)) continue
-      this.inFlight.add(key)
-      void this.send(wake).then(
-        result => this.finish(key, result.ok || !TRANSIENT.has(result.code)),
-        () => this.finish(key, false),
-      )
-    }
+    for (const wake of wakes) this.dispatch(wake)
+  }
+
+  private dispatch(wake: PendingWake): void {
+    const key = keyOf(wake)
+    if (this.disposed || this.settled.has(key) || this.inFlight.has(key) || this.timers.has(key)) return
+    this.inFlight.add(key)
+    void this.send(wake).then(
+      result => this.finish(key, result.ok || !TRANSIENT.has(result.code)),
+      () => this.finish(key, false),
+    )
   }
 
   private finish(key: string, final: boolean): void {
@@ -83,8 +88,10 @@ export class WakeDispatcher {
     const delay = Math.min(1000 * 2 ** (failures - 1), 30_000)
     this.timers.set(key, this.schedule(() => {
       this.timers.delete(key)
-      // Retry only if the wake is still wanted for the same record revision.
-      this.sync(this.latest.filter(wake => `${wake.sessionId}:${wake.revision}` === key))
+      // Retry only if the wake is still wanted for the same record revision;
+      // the wanted set itself is left untouched for the other sessions.
+      const wanted = this.latest.find(wake => keyOf(wake) === key)
+      if (wanted !== undefined) this.dispatch(wanted)
     }, delay))
   }
 
