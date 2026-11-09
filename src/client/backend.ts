@@ -330,7 +330,9 @@ export class LocalBackend implements TaskBackend {
       const seq = Math.max(summary.lastTurnStartSeq ?? 0, summary.lastTurnEnd?.seq ?? 0) + 1
       const activity = running
         ? { ...summary, lastTurnStartSeq: seq, lastTurnStartAt: now }
-        : { ...summary, lastTurnEnd: { seq, at: now, reason: 'completed' } }
+        // A stopped running flag cannot tell success from failure or
+        // cancellation; record the outcome as unknown ("needs a look").
+        : { ...summary, lastTurnEnd: { seq, at: now, reason: 'unknown' } }
       return { ...current, activity }
     }).then((written) => {
       this.afterWrite(sessionId, written)

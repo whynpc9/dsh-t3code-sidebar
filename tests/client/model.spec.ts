@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { archivedRows, buildRows, projectGroups, projectRank, taskSections, type ModelInputs, type SessionRow } from '../../src/client/model.ts'
+import { archivedRows, buildRows, currentHiddenByFilter, projectGroups, projectRank, taskSections, type ModelInputs, type SessionRow } from '../../src/client/model.ts'
 import type { TaskView } from '../../src/contracts/schema.ts'
 import { emptyRecord } from '../../src/domain/types.ts'
 
@@ -100,5 +100,17 @@ describe('projectRank', () => {
     const rows = buildRows({ ...base, status: new Map() })
     const one = projectGroups(rows, base.workspaces, { scope: 'w1', query: '', contentHits: null }, 'Ungrouped')[0]!
     expect(one.primary.map(row => row.sessionId)).toEqual(['b', 'a'])
+  })
+})
+
+describe('currentHiddenByFilter', () => {
+  it('flags the current session when a search or scope excludes it, and not otherwise', () => {
+    const rows = buildRows(inputs())
+    const current = rows.find(row => row.current)
+    expect(current?.sessionId).toBe('cur')
+    expect(currentHiddenByFilter(current, { scope: null, query: '', contentHits: null })).toBe(false)
+    expect(currentHiddenByFilter(current, { scope: null, query: 'title b', contentHits: null })).toBe(true)
+    expect(currentHiddenByFilter(current, { scope: 'w1', query: '', contentHits: null })).toBe(true)
+    expect(currentHiddenByFilter(current, { scope: null, query: 'title cur', contentHits: null })).toBe(false)
   })
 })

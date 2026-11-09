@@ -7,7 +7,7 @@ import { DAY_MS, type Placement } from '../../domain/types.ts'
 import { snoozePresets, validateSnoozeUntil } from '../../domain/time.ts'
 import type { Key } from '../locales.ts'
 import {
-  archivedRows, buildRows, projectGroups, taskSections,
+  archivedRows, buildRows, currentHiddenByFilter, projectGroups, taskSections,
   type Filter, type ProjectGroup, type Row,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
@@ -90,11 +90,8 @@ export function TaskSidebar({ runtime, wide = true, useSectionScroller }: Sideba
   }, [query, prefs.includeContent, runtime])
 
   const filter: Filter = { scope: prefs.scope, query, contentHits: contentHits?.ids ?? null }
-  const visibleIds = useMemo(() => new Set(
-    rows.filter(row => row.placement !== null && (filter.scope === null || row.workspaceId === filter.scope
-      || (filter.scope === 'ungrouped' && row.workspaceId === null))).map(row => row.sessionId),
-  ), [rows, filter.scope])
-  const currentOutOfScope = current !== undefined && current.placement !== null && !visibleIds.has(current.sessionId)
+  // Same scope + search predicate the sections and project groups render with.
+  const currentOutOfScope = currentHiddenByFilter(current, filter)
 
   const collapsedKey = (id: string) => `${prefs.view}:${id}`
   const isCollapsed = (id: string, fallback: boolean): boolean => prefs.collapsed[collapsedKey(id)] ?? fallback

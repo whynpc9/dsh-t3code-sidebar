@@ -191,6 +191,11 @@ export function taskSections(rows: readonly Row[], filter: Filter): Section[] {
   })
 }
 
+/** Whether the current session has a section but the active scope/search hides it. */
+export function currentHiddenByFilter(current: Row | undefined, filter: Filter): boolean {
+  return current !== undefined && current.placement !== null && !matches(current, filter)
+}
+
 export function archivedRows(rows: readonly Row[], filter: Filter): Row[] {
   return rows.filter(row => row.native.archived && matches(row, filter))
 }
