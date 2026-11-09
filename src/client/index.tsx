@@ -18,7 +18,7 @@ import { en, NS, zh, type Key } from './locales.ts'
 import { buildRows, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot } from './model.ts'
 import { DEFAULT_PREFS, type Prefs, type Runtime } from './runtime.ts'
 import { createStore, type Readable, type Store } from './store.ts'
-import { browserObservedWakes } from './wakes.ts'
+import { browserObservedWakes, WakeDispatcher } from './wakes.ts'
 
 export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'contextMenus', 'remote', 'locale']
 
@@ -225,24 +225,22 @@ export function apply(rawCtx: Context): void {
 
   // ── Persist Snooze wakes caused by requests only this browser observes ──
   ctx.effect(() => {
-    const attempted = new Set<string>()
+    const dispatcher = new WakeDispatcher(async (wake) => {
+      const live = liveFacts(wake.sessionId)
+      if (backend === null || live === null) {
+        return { ok: false, code: 'BASELINE_PENDING', message: 'not connected', task: null }
+      }
+      return await backend.command(wake.sessionId, { kind: 'reopen' }, {
+        ...live, observedPending: live.facts.pending.known ? live.facts.pending.value : null,
+      })
+    })
     const check = () => {
       const state = backendState.getSnapshot()
       if (state.kind !== 'host' || state.status !== 'ready' || backend === null) return
-      for (const wake of browserObservedWakes(state.tasks, liveFacts, Date.now() + state.clockOffset)) {
-        const key = `${wake.sessionId}:${wake.revision}`
-        if (attempted.has(key)) continue
-        attempted.add(key)
-        const live = liveFacts(wake.sessionId)
-        if (live === null) continue
-        // A CONFLICT means another window already persisted a change; nothing to do.
-        void backend.command(wake.sessionId, { kind: 'reopen' }, {
-          ...live, observedPending: live.facts.pending.known ? live.facts.pending.value : null,
-        }).catch(() => undefined)
-      }
+      dispatcher.sync(browserObservedWakes(state.tasks, liveFacts, Date.now() + state.clockOffset))
     }
     const stops = [status.subscribe(check), sessionsList.subscribe(check), backendState.subscribe(check)]
-    return () => { for (const stop of stops) stop() }
+    return () => { for (const stop of stops) stop(); dispatcher.dispose() }
   }, 't3Sidebar: browser-observed wakes')
 
   // ── Slot: replace the session browsing region ────────────────────────────

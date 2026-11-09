@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { browserObservedWakes } from '../../src/client/wakes.ts'
+import { browserObservedWakes, WakeDispatcher } from '../../src/client/wakes.ts'
+import type { CommandResult } from '../../src/contracts/schema.ts'
 import type { TaskView } from '../../src/contracts/schema.ts'
 import { EMPTY_ACTIVITY, emptyRecord, known, type PendingSignal } from '../../src/domain/types.ts'
 
@@ -39,5 +40,57 @@ describe('browserObservedWakes', () => {
     const pinned = { ...facts([{ source: 'live', key: 'ap1', kind: 'approval' }]), native: { pinned: true, archived: false } }
     expect(browserObservedWakes(tasks, () => pinned, NOW)).toEqual([])
     expect(browserObservedWakes(tasks, () => facts([]), NOW + 4_000_000)).toEqual([])
+  })
+})
+
+describe('WakeDispatcher', () => {
+  const ok: CommandResult = { ok: true, task: null as never, dataRevision: 0, replayed: false }
+  const fail = (code: 'STORAGE_UNAVAILABLE' | 'CONFLICT'): CommandResult => ({ ok: false, code, message: code, task: null })
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  function harness(results: (CommandResult | Error)[]) {
+    const sent: string[] = []
+    const timers: { task: () => void; delay: number }[] = []
+    const dispatcher = new WakeDispatcher(async (wake) => {
+      sent.push(wake.sessionId)
+      const next = results.shift() ?? ok
+      if (next instanceof Error) throw next
+      return next
+    }, (task, delay) => { timers.push({ task, delay }); return () => {} })
+    return { dispatcher, sent, timers }
+  }
+  const wake = { sessionId: 's1', revision: 4 }
+
+  it('sends once per revision after success', async () => {
+    const { dispatcher, sent, timers } = harness([ok])
+    dispatcher.sync([wake]); dispatcher.sync([wake])
+    await flush()
+    dispatcher.sync([wake])
+    expect(sent).toEqual(['s1'])
+    expect(timers).toHaveLength(0)
+  })
+
+  it('retries transient failures and thrown errors with backoff until persisted', async () => {
+    const { dispatcher, sent, timers } = harness([fail('STORAGE_UNAVAILABLE'), new Error('socket closed'), ok])
+    dispatcher.sync([wake])
+    await flush()
+    expect(timers.map(timer => timer.delay)).toEqual([1000])
+    timers[0]!.task(); await flush()
+    expect(timers.map(timer => timer.delay)).toEqual([1000, 2000])
+    timers[1]!.task(); await flush()
+    expect(sent).toEqual(['s1', 's1', 's1'])
+    dispatcher.sync([wake])
+    expect(sent).toHaveLength(3)
+  })
+
+  it('does not retry a definitive rejection or a wake that is no longer wanted', async () => {
+    const conflict = harness([fail('CONFLICT')])
+    conflict.dispatcher.sync([wake]); await flush()
+    expect(conflict.timers).toHaveLength(0)
+    const gone = harness([fail('STORAGE_UNAVAILABLE')])
+    gone.dispatcher.sync([wake]); await flush()
+    gone.dispatcher.sync([])
+    gone.timers[0]!.task(); await flush()
+    expect(gone.sent).toEqual(['s1'])
   })
 })

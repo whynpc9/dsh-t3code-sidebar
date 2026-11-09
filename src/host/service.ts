@@ -579,7 +579,9 @@ export class T3SidebarService extends TypertRemoteService {
         seen[header.id] = token
         const previous = global.seenRevisions[header.id]
         if (this.failedFolds.has(header.id)) { stale.push(header.id); continue }
-        if (observed.has(header.id)) continue
+        // `observedLive` now holds events that committed while the listing ran;
+        // they explain a token change too (and stay for the next comparison).
+        if (observed.has(header.id) || this.observedLive.has(header.id)) continue
         const changedWhileAway = previous !== undefined
           ? previous !== token
           // Unknown to us but created after installation: created while we were away.
