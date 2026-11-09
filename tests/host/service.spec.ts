@@ -138,6 +138,29 @@ describe('T3SidebarService', () => {
     expect(tasks.find(task => task.sessionId === 's1')?.record.policyEligibleSince).toBeGreaterThanOrEqual(reenabledAt)
     expect(tasks.find(task => task.sessionId === 's2')).toBeUndefined()
   })
+
+  it('surfaces Settled and Snoozed tasks whose session changed while the plugin was away', async () => {
+    const storage = new MemoryDomainFacility()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' })
+    await first.service.command(command({ sessionId: 's1', action: { kind: 'settle' } }))
+    await first.service.command(command({ sessionId: 's2', action: { kind: 'snooze', until: Date.now() + HOUR } }))
+    const second = await boot(storage, { s1: 'r2', s2: 'r2' })
+    const tasks = second.service.getSnapshot(1).tasks
+    expect(tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
+    expect(tasks.find(task => task.sessionId === 's2')?.record).toMatchObject({ disposition: { kind: 'normal' } })
+    expect(tasks.find(task => task.sessionId === 's2')?.record.lastSnoozeWakeAt).not.toBeNull()
+    expect(second.service.listTransitions(10).filter(entry => entry.reason === 'missed-activity')).toHaveLength(2)
+  })
+
+  it('re-samples outstanding background activity on the sweep and publishes the change', async () => {
+    const { service, host } = await boot()
+    host.activity.set('s1', ['subagent'])
+    await service.command(command({ action: { kind: 'reopen' } }))
+    expect(service.getSnapshot(1).tasks[0]?.activity).toEqual(['subagent'])
+    host.activity.set('s1', [])
+    await (service as unknown as { sweep(): Promise<void> }).sweep()
+    expect(service.getSnapshot(1).tasks[0]?.activity).toEqual([])
+  })
 })
 
 describe('nearestSnoozeDeadline', () => {

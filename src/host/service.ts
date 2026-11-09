@@ -351,6 +351,23 @@ export class T3SidebarService extends TypertRemoteService {
     return cached.value
   }
 
+  /** Re-query every session whose cached activity is non-empty; publish changed views. */
+  private async refreshOutstandingActivity(): Promise<void> {
+    const outstanding = [...this.activityCache]
+      .filter(([, cached]) => cached.value.known && cached.value.value.length > 0)
+      .map(([sessionId]) => sessionId)
+    for (let index = 0; index < outstanding.length; index += ACTIVITY_CONCURRENCY) {
+      await Promise.all(outstanding.slice(index, index + ACTIVITY_CONCURRENCY).map(async (sessionId) => {
+        const record = this.domain?.table('tasks').get(sessionId)
+        const before = record === undefined ? null : JSON.stringify(this.cachedActivity(record))
+        await this.queryActivity(sessionId)
+        if (record !== undefined && JSON.stringify(this.cachedActivity(record)) !== before) {
+          this.publish([this.viewOf(record)], null)
+        }
+      }))
+    }
+  }
+
   /** Re-sample activity once the Agent has finished unwinding a turn. */
   private refreshActivitySoon(sessionId: string): void {
     for (const delay of [400, 2500]) {
@@ -459,10 +476,13 @@ export class T3SidebarService extends TypertRemoteService {
       this.observedLive.clear()
       for (const sessionId of stale) {
         const before = this.recordOf(sessionId, now)
-        if (before.policyEligibleSince >= now) continue
-        const record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
-        await domain.table('tasks').put(sessionId, record).catch(() => undefined)
-        this.publish([this.viewOf(record)], null)
+        if (before.policyEligibleSince >= now && before.disposition.kind === 'normal') continue
+        // The missed events are unknown, so the summary cannot prove "no new
+        // input": surface parked tasks rather than keep them hidden.
+        let record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
+        if (record.disposition.kind === 'snoozed') record = { ...record, disposition: { kind: 'normal' }, lastSnoozeWakeAt: now }
+        else if (record.disposition.kind === 'settled') record = { ...record, disposition: { kind: 'normal' } }
+        await this.commit(record, before, 'missed-activity', null).catch(() => undefined)
       }
       await domain.global.set({ ...domain.global.get(), seenRevisions: seen }).catch(() => undefined)
     }).catch(() => undefined)
@@ -524,7 +544,10 @@ export class T3SidebarService extends TypertRemoteService {
         const next = reconcile(record, this.factsOf(record, this.cachedActivity(record), null), native, now)
         if (next !== null) await this.commit(next, record, 'snooze-expired', null).catch(() => undefined)
       }
-      // 2. Automatic settle: time pre-filter first, then fresh activity facts for due candidates.
+      // 2. Re-sample sessions that last reported running work (subagents, jobs,
+      //    schedules); their completion emits no event this service folds.
+      await this.refreshOutstandingActivity()
+      // 3. Automatic settle: time pre-filter first, then fresh activity facts for due candidates.
       if (global.policy.autoSettleAfterDays === null) return
       const due: { record: TaskRecord; header: HostSessionHeader }[] = []
       for (const header of this.headers.values()) {
