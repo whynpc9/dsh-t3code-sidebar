@@ -496,8 +496,12 @@ export class T3SidebarService extends TypertRemoteService {
     const running: Known<boolean> = activity.known ? known(activity.value.includes('turn')) : unknown
     let pending: Known<readonly PendingSignal[]> = unknown
     if (observedPending !== null) {
-      // The browser saw these; durable asks it may not list are added when known.
-      pending = known(durablePending.known ? mergePending(observedPending, durablePending.value) : observedPending)
+      // Browser observations are a lower bound, never proof of absence: a cold
+      // summary can omit the questions projection. They are complete only
+      // together with an exact durable read; on their own, a non-empty list
+      // still proves something is pending, but an empty one proves nothing.
+      if (durablePending.known) pending = known(mergePending(observedPending, durablePending.value))
+      else if (observedPending.length > 0) pending = known(observedPending)
     } else if (activity.known && !activity.value.includes('turn') && durablePending.known) {
       // In-turn waits (approvals, blocking questions) show up as `turn`
       // activity; outside a turn only durable asks can still be pending.

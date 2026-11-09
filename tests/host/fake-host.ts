@@ -61,6 +61,8 @@ export interface FakeHost {
   headers: { id: string; createdAt: number; origin?: 'subagent'; revision?: string }[]
   /** Durable `userQuestions.active` per session for exact projection reads. */
   questions: Map<string, { callId: string; state: string }[]>
+  /** Make exact projection reads fail (durable pending state unknown). */
+  projectionsFail: boolean
   /** Runs inside `sessionPersistence.list()` before it answers (to simulate concurrent commits). */
   duringList: (() => void) | null
 }
@@ -74,9 +76,10 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   ctx.provide('storageDomain', storage)
   ctx.provide('workspaceRegistry', registry)
   ctx.provide('sessionController', {
-    projections: async ({ sessionId }: { sessionId: string }) => ({
-      kind: 'sequenced', asOfSeq: 1, values: { userQuestions: { active: questions.get(sessionId) ?? [], settled: [] } },
-    }),
+    projections: async ({ sessionId }: { sessionId: string }) => {
+      if (host.projectionsFail) throw new Error('history unavailable')
+      return { kind: 'sequenced', asOfSeq: 1, values: { userQuestions: { active: questions.get(sessionId) ?? [], settled: [] } } }
+    },
   })
   const host = {} as FakeHost
   ctx.provide('sessionPersistence', {
@@ -89,5 +92,5 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   ;(ctx as unknown as { on: (name: string, fn: unknown) => void }).on('workspace/session-activity',
     async ({ sessionId }: { sessionId: string }, next: () => Promise<readonly { kind: string }[]>) =>
       [...(activity.get(sessionId) ?? []).map(kind => ({ kind })), ...await next()])
-  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null })
+  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false })
 }

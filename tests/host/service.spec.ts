@@ -91,6 +91,17 @@ describe('T3SidebarService', () => {
     expect(service.listTransitions(10)).toMatchObject([{ from: 'normal', to: 'settled', reason: 'manual:settle' }])
   })
 
+  it('treats an empty browser observation as a lower bound when the durable read fails', async () => {
+    const { service, host } = await boot()
+    host.projectionsFail = true
+    expect(await service.command(command({ action: { kind: 'settle' }, observedPending: [] })))
+      .toMatchObject({ ok: false, code: 'BASELINE_PENDING' })
+    expect(await service.command(command({ action: { kind: 'settle' }, observedPending: [{ source: 'live', key: 'q', kind: 'user-question' }] })))
+      .toMatchObject({ ok: false, code: 'PENDING_INPUT' })
+    host.projectionsFail = false
+    expect(await service.command(command({ action: { kind: 'settle' }, observedPending: [] }))).toMatchObject({ ok: true })
+  })
+
   it('does not apply a command whose write fails (persist before publish)', async () => {
     const storage = new MemoryDomainFacility()
     const { service } = await boot(storage)
