@@ -601,20 +601,18 @@ export class T3SidebarService extends TypertRemoteService {
         const token = JSON.stringify(revision)
         seen[header.id] = token
         const previous = global.seenRevisions[header.id]
-        if (this.failedFolds.has(header.id)) { stale.push({ sessionId: header.id, token }); continue }
+        // A pending verification stays pending until a replay succeeds: live
+        // events (even a title update) say nothing about the earlier history.
+        if (this.failedFolds.has(header.id) || this.unverified.has(header.id)) { stale.push({ sessionId: header.id, token }); continue }
         // `observedLive` now holds events that committed while the listing ran;
         // they explain a token change too (and stay for the next comparison).
-        if (observed.has(header.id) || this.observedLive.has(header.id)) {
-          // Folded live while the plugin ran: nothing is left to verify.
-          this.unverified.delete(header.id)
-          continue
-        }
+        if (observed.has(header.id) || this.observedLive.has(header.id)) continue
         const changedWhileAway = previous !== undefined
           ? previous !== token
           // Unknown to us but created after installation: possibly created while
           // we were away, or created and parked before its first refresh.
           : global.installedAt > 0 && header.createdAt > global.installedAt && Object.keys(global.seenRevisions).length > 0
-        if (changedWhileAway || this.unverified.has(header.id)) stale.push({ sessionId: header.id, token })
+        if (changedWhileAway) stale.push({ sessionId: header.id, token })
       }
       const keepPrevious = (sessionId: string): void => {
         // Not acknowledged: the next refresh compares against the old token again.
@@ -704,14 +702,28 @@ export class T3SidebarService extends TypertRemoteService {
       verified = true
     } else {
       // Events before the park were in front of the user when they parked it.
+      // Apply the wake rules after every replayed event, as the live path
+      // would have: a later success must not mask an earlier failure.
+      const native = this.nativeOf(sessionId)
+      const wakeAt = (summary: TaskRecord['activity']): TaskRecord | null => reconcile(
+        { ...before, activity: summary },
+        { running: unknown, activity: this.cachedActivity({ ...before, activity: summary }), pending, summary },
+        native, now,
+      )
       let activity = before.activity
-      for (const event of events ?? []) if (event.time >= since) activity = foldActivity(activity, event)
+      let woken = wakeAt(activity)
+      for (const event of events ?? []) {
+        if (event.time < since) continue
+        const folded = foldActivity(activity, event)
+        if (folded === activity) continue
+        activity = folded
+        woken ??= wakeAt(activity)
+      }
       const replayed: TaskRecord = { ...before, activity }
-      const facts: TaskFacts = { running: unknown, activity: this.cachedActivity(replayed), pending, summary: activity }
-      const woken = reconcile(replayed, facts, this.nativeOf(sessionId), now)
       const expired = before.disposition.kind === 'snoozed' && now >= before.disposition.until
       if (woken !== null) {
-        await this.commit(woken, before, expired ? 'snooze-expired' : 'missed-activity', null)
+        // The wake is decided by the first waking prefix; the summary keeps everything replayed.
+        await this.commit({ ...woken, activity }, before, expired ? 'snooze-expired' : 'missed-activity', null)
         verified = true
       } else {
         // Without a wake, verification needs both the full replay and an

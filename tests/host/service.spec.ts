@@ -456,6 +456,46 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(missed(third.service)).toHaveLength(2)
   })
 
+  it('wakes a Snooze on an offline failure even when a later turn succeeded', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's2', HOUR)
+    await quit(first.host)
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    appendStored(first.host, 's2', 'turn/start', { turn: 2 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+    const second = await boot(storage, { s1: 'r1', s2: 'r2' }, undefined, host => { host.logs = logs })
+    expect(kindOf(second.service, 's2')).toBe('normal')
+    // The summary still records everything replayed.
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record.activity.lastTurnEnd)
+      .toMatchObject({ reason: 'completed' })
+    expect(missed(second.service)).toHaveLength(1)
+  })
+
+  it('keeps an outstanding verification after an unrelated live event such as a rename', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await settle(first.service, 's1')
+    await quit(first.host)
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } }) // offline input
+    const second = await boot(storage, { s1: 'r2', s2: 'r1' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
+    expect(kindOf(second.service, 's1')).toBe('settled')
+    const title = appendStored(second.host, 's1', 'session/title', { title: 'renamed' })
+    ;(second.host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's1' }, title)
+    second.host.headers[0]!.revision = 'r3'
+    await internals(second.service).refreshHeaders()
+    expect(internals(second.service).unverified.get('s1')).toMatchObject({ token: '"r3"' })
+    expect(seenRevisions(storage).s1).toBe('"r1"')
+    second.host.replayFail = false
+    internals(second.service).unverified.set('s1', { ...internals(second.service).unverified.get('s1')!, at: 0 })
+    await internals(second.service).sweep()
+    expect(kindOf(second.service, 's1')).toBe('normal')
+    expect(seenRevisions(storage).s1).toBe('"r3"')
+  })
+
   it('still expires a due Snooze at startup and retries a failed replay without waking early', async () => {
     const storage = new MemoryDomainFacility()
     const logs = new Map<string, StoredLog>()
