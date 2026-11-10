@@ -26,8 +26,8 @@ import {
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
 import {
-  DEFAULT_AUTO_SETTLE_DAYS, emptyRecord, known, unknown,
-  type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
+  DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, emptyRecord, known, unknown,
+  type ActivitySummary, type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
 import {
   optionalService,
@@ -732,7 +732,11 @@ export class T3SidebarService extends TypertRemoteService {
     } else {
       // Events before the park were in front of the user when they parked it.
       // Apply the wake rules after every replayed event, as the live path
-      // would have: a later success must not mask an earlier failure.
+      // would have: a later success must not mask an earlier failure. The
+      // replayed history is judged on its own (the rules compare it with the
+      // parking baselines only), so a later live event already folded into
+      // the stored summary cannot hide it either; the record then keeps the
+      // merge of both.
       const native = this.nativeOf(sessionId)
       const wakeAt = (summary: TaskRecord['activity']): TaskRecord | null => reconcile(
         { ...before, activity: summary },
@@ -740,13 +744,15 @@ export class T3SidebarService extends TypertRemoteService {
         native, now,
       )
       let activity = before.activity
+      let history: ActivitySummary = EMPTY_ACTIVITY
       let woken = wakeAt(activity)
       for (const event of events ?? []) {
         if (event.time < since) continue
-        const folded = foldActivity(activity, event)
-        if (folded === activity) continue
-        activity = folded
-        woken ??= wakeAt(activity)
+        activity = foldActivity(activity, event)
+        const folded = foldActivity(history, event)
+        if (folded === history) continue
+        history = folded
+        woken ??= wakeAt(history)
       }
       const replayed: TaskRecord = { ...before, activity }
       const expired = before.disposition.kind === 'snoozed' && now >= before.disposition.until

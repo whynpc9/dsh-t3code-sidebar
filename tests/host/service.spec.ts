@@ -476,6 +476,32 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(missed(second.service)).toHaveLength(1)
   })
 
+  it('wakes on an offline failure even after a later successful turn was folded live', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's2', HOUR)
+    await quit(first.host)
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    const second = await boot(storage, { s1: 'r1', s2: 'r2' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
+    expect(kindOf(second.service, 's2')).toBe('snoozed')
+    // A background turn succeeds live while the replay awaits its retry.
+    const emit = (type: string, data: unknown) => (second.host.ctx as unknown as { emit(name: string, ...args: unknown[]): void })
+      .emit('session/event', { id: 's2' }, appendStored(second.host, 's2', type, data))
+    emit('turn/start', { turn: 2 })
+    emit('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    await tick(30)
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record)
+      .toMatchObject({ disposition: { kind: 'snoozed' }, activity: { lastTurnEnd: { seq: 3, reason: 'completed' } } })
+    second.host.replayFail = false
+    internals(second.service).unverified.set('s2', { ...internals(second.service).unverified.get('s2')!, at: 0 })
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record)
+      .toMatchObject({ disposition: { kind: 'normal' }, activity: { lastTurnEnd: { seq: 3, reason: 'completed' } } })
+    expect(missed(second.service)).toHaveLength(1)
+  })
+
   it('keeps an outstanding verification after an unrelated live event such as a rename', async () => {
     const storage = new MemoryDomainFacility()
     const logs = new Map<string, StoredLog>()
