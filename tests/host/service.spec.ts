@@ -530,6 +530,39 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(kindOf(service, 's2')).toBe('settled') // nothing happened after the park
   })
 
+  it('discards a verification whose reads predate the user re-parking the session', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await settle(first.service, 's1')
+    await quit(first.host)
+    // Restart: s1 has an open question and its stored log reads slowly.
+    let release: () => void = () => {}
+    const host = createFakeHost(storage)
+    host.logs = logs
+    host.questions.set('s1', [{ callId: 'q1', state: 'open' }])
+    host.replayGate = new Promise<void>((resolve) => { release = resolve })
+    host.headers.push({ id: 's1', createdAt: Date.now() - 1000, revision: 'r2' }, { id: 's2', createdAt: Date.now() - 1000, revision: 'r1' })
+    await (host.ctx as Context).plugin(T3SidebarService)
+    hosts.push(host)
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await tick(30)
+    expect(host.opened).toEqual(['s1'])
+    // Meanwhile the user answers the question and marks the session handled again.
+    host.questions.delete('s1')
+    await settle(service, 's1')
+    release()
+    await service.ready
+    await internals(service).verifyDue() // the stale result was re-queued, not applied
+    expect(kindOf(service, 's1')).toBe('settled')
+    expect(missed(service)).toHaveLength(0)
+    expect(internals(service).unverified.has('s1')).toBe(false)
+    expect(seenRevisions(storage).s1).toBe('"r2"')
+  })
+
   it('still expires a due Snooze at startup and retries a failed replay without waking early', async () => {
     const storage = new MemoryDomainFacility()
     const logs = new Map<string, StoredLog>()

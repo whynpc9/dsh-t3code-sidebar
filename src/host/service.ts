@@ -686,16 +686,21 @@ export class T3SidebarService extends TypertRemoteService {
     if (entry === undefined || this.disposed) return
     this.verifying.add(sessionId)
     try {
+      // The reads below are judged against the parking they started under.
+      const baseline = JSON.stringify(this.recordOf(sessionId, Date.now()).disposition)
       const [events, pending] = await Promise.all([this.replayFoldable(sessionId), this.queryDurablePending(sessionId)])
       if (this.disposed) return
-      const verified = await this.queue.run(() => this.applyVerification(sessionId, entry.token, events, pending))
-        .catch(() => false)
+      const outcome = await this.queue.run(() => this.applyVerification(sessionId, entry.token, baseline, events, pending))
+        .catch((): VerifyOutcome => 'failed')
       const current = this.unverified.get(sessionId)
       // A newer token arrived meanwhile: keep that one due for its own check.
       if (current !== undefined && current.token !== entry.token) return
-      if (verified) {
+      if (outcome === 'verified') {
         this.unverified.delete(sessionId)
         this.failedFolds.delete(sessionId)
+      } else if (outcome === 'stale') {
+        // Re-parked while the reads ran: check again (not a failure, no backoff).
+        this.unverified.set(sessionId, { ...entry, at: Date.now() })
       } else {
         const failures = entry.failures + 1
         this.unverified.set(sessionId, { token: entry.token, failures, at: Date.now() + unknownRetryDelay(failures) })
@@ -705,10 +710,15 @@ export class T3SidebarService extends TypertRemoteService {
     }
   }
 
-  /** Runs inside the queue. Returns whether the session is now verified. */
+  /**
+   * Runs inside the queue. `stale` when the parking changed since the reads
+   * began (a pending answer read before the user re-parked would make an
+   * already-resolved request look new and undo their command).
+   */
   private async applyVerification(
-    sessionId: string, token: string, events: readonly FoldableEvent[] | null, pending: Known<readonly PendingSignal[]>,
-  ): Promise<boolean> {
+    sessionId: string, token: string, baseline: string,
+    events: readonly FoldableEvent[] | null, pending: Known<readonly PendingSignal[]>,
+  ): Promise<VerifyOutcome> {
     const domain = this.requireDomain()
     const now = Date.now()
     const before = this.recordOf(sessionId, now)
@@ -717,6 +727,8 @@ export class T3SidebarService extends TypertRemoteService {
     if (since === null) {
       // Reopened meanwhile; the live path owns it from here.
       verified = true
+    } else if (JSON.stringify(before.disposition) !== baseline) {
+      return 'stale'
     } else {
       // Events before the park were in front of the user when they parked it.
       // Apply the wake rules after every replayed event, as the live path
@@ -755,7 +767,7 @@ export class T3SidebarService extends TypertRemoteService {
       const global = domain.global.get()
       await domain.global.set({ ...global, seenRevisions: { ...global.seenRevisions, [sessionId]: token } }).catch(() => undefined)
     }
-    return verified
+    return verified ? 'verified' : 'failed'
   }
 
   /**
@@ -1082,6 +1094,8 @@ export function nearestSnoozeDeadline(
   }
   return nearest
 }
+
+type VerifyOutcome = 'verified' | 'failed' | 'stale'
 
 /** When the current parking began, or `null` for a normal task. */
 function parkedSince(record: TaskRecord): number | null {
