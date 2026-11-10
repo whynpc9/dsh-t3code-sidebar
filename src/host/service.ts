@@ -134,6 +134,8 @@ export class T3SidebarService extends TypertRemoteService {
    */
   private readonly unverified = new Map<string, { readonly token: string; readonly failures: number; readonly at: number }>()
   private readonly verifying = new Set<string>()
+  /** The verification pass in flight; replay work never runs on the scheduling path. */
+  private verification: Promise<void> | undefined
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -143,7 +145,11 @@ export class T3SidebarService extends TypertRemoteService {
   private disposed = false
   private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
   private markReady: () => void = () => {}
-  /** Settles once storage is open and the startup catch-up has run. */
+  /**
+   * Settles once storage is open and the startup catch-up has run, including
+   * the first verification pass over parked sessions. Snooze expiry and the
+   * scheduler start before that pass and never wait for it.
+   */
   readonly ready: Promise<void> = new Promise((resolve) => { this.markReady = resolve })
 
   constructor(ctx: Context) {
@@ -171,7 +177,7 @@ export class T3SidebarService extends TypertRemoteService {
     this.ctx.effect(() => () => clearInterval(refresh), 't3Sidebar: header refresh')
     // Catch up Snooze expiries and due auto-settles missed while the Host was down.
     void this.sweep()
-    this.markReady()
+    void this.verifyDue().finally(() => this.markReady())
     // Learn which sessions already have background work (jobs, subagents,
     // schedules) so they show as Working and enter the refresh set.
     void this.seedActivity()
@@ -644,11 +650,22 @@ export class T3SidebarService extends TypertRemoteService {
       }
       await domain.global.set({ ...domain.global.get(), seenRevisions: seen }).catch(() => undefined)
     }).catch(() => undefined)
-    await this.verifyDue()
+    // In the background: stored-log reads can be slow and must not hold up
+    // the header refresh, startup, or Snooze deadlines.
+    void this.verifyDue()
   }
 
-  /** Verify every parked session whose retry instant has come, with bounded concurrency. */
-  private async verifyDue(): Promise<void> {
+  /**
+   * Start (or join) one verification pass over every parked session whose
+   * retry instant has come, with bounded concurrency. Entries that become due
+   * while a pass runs are picked up by the next sweep.
+   */
+  private verifyDue(): Promise<void> {
+    this.verification ??= this.runVerifications().catch(() => undefined).finally(() => { this.verification = undefined })
+    return this.verification
+  }
+
+  private async runVerifications(): Promise<void> {
     const now = Date.now()
     const due = [...this.unverified]
       .filter(([sessionId, entry]) => entry.at <= now && !this.verifying.has(sessionId))
@@ -885,10 +902,11 @@ export class T3SidebarService extends TypertRemoteService {
         }))
       }
     }).catch(() => undefined)
-    // 4. Retry parked sessions whose missed-activity verification failed.
-    await this.verifyDue()
     this.fallbackSweepAt = Date.now() + SWEEP_MS
     this.schedule()
+    // 4. Retry parked sessions whose missed-activity verification failed, off
+    //    the scheduling path (the deadline timer is already armed).
+    void this.verifyDue()
   }
 
   // ── Follow stream ─────────────────────────────────────────────────────────

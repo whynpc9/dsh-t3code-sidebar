@@ -71,6 +71,8 @@ export interface FakeHost {
   replayFail: boolean
   /** Session ids opened for reading, in order. */
   opened: string[]
+  /** When set, stored-log opens wait for it (a slow disk). */
+  replayGate: Promise<void> | null
 }
 
 export interface StoredEvent { type: string; seq: number; time: number; data: unknown }
@@ -109,6 +111,7 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
     open: async (id: string, access: 'read') => {
       if (access !== 'read') throw new Error('read only')
       host.opened.push(id)
+      if (host.replayGate !== null) await host.replayGate
       if (host.replayFail) throw new Error('log unavailable')
       const log = host.logs.get(id) ?? { inherited: 0, events: [] }
       return {
@@ -124,5 +127,5 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   ;(ctx as unknown as { on: (name: string, fn: unknown) => void }).on('workspace/session-activity',
     async ({ sessionId }: { sessionId: string }, next: () => Promise<readonly { kind: string }[]>) =>
       [...(activity.get(sessionId) ?? []).map(kind => ({ kind })), ...await next()])
-  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false, logs: new Map(), replayFail: false, opened: [] })
+  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false, logs: new Map(), replayFail: false, opened: [], replayGate: null })
 }

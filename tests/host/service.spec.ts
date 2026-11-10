@@ -313,6 +313,7 @@ describe('T3SidebarService', () => {
     storage.failTableWrites = false
     host.headers[0]!.revision = 'r2'
     await (service as unknown as { refreshHeaders(): Promise<void> }).refreshHeaders()
+    await (service as unknown as { verifyDue(): Promise<void> }).verifyDue()
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
   })
 
@@ -345,6 +346,7 @@ describe('missed-activity verification after a restart (#2)', () => {
   type Internals = {
     refreshHeaders(): Promise<void>
     sweep(): Promise<void>
+    verifyDue(): Promise<void>
     unverified: Map<string, { token: string; failures: number; at: number }>
   }
   const internals = (service: T3SidebarService) => service as unknown as Internals
@@ -451,7 +453,7 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(tasks.find(task => task.sessionId === 's2')?.record.activity.lastTurnEnd).toMatchObject({ reason: 'error' })
     expect(missed(second.service)).toHaveLength(2)
     await internals(second.service).refreshHeaders()
-    await internals(second.service).sweep()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
     const third = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, host => { host.logs = logs })
     expect(missed(third.service)).toHaveLength(2)
   })
@@ -491,9 +493,41 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(seenRevisions(storage).s1).toBe('"r1"')
     second.host.replayFail = false
     internals(second.service).unverified.set('s1', { ...internals(second.service).unverified.get('s1')!, at: 0 })
-    await internals(second.service).sweep()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
     expect(kindOf(second.service, 's1')).toBe('normal')
     expect(seenRevisions(storage).s1).toBe('"r3"')
+  })
+
+  it('never holds Snooze expiry or the deadline timer behind a slow replay', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's1', 30)
+    await settle(first.service, 's2')
+    await quit(first.host)
+    await tick(50)
+    // Restart while s2's stored log hangs.
+    let release: () => void = () => {}
+    const host = createFakeHost(storage)
+    host.logs = logs
+    host.replayGate = new Promise<void>((resolve) => { release = resolve })
+    host.headers.push({ id: 's1', createdAt: Date.now() - 1000, revision: 'r1' }, { id: 's2', createdAt: Date.now() - 1000, revision: 'r2' })
+    await (host.ctx as Context).plugin(T3SidebarService)
+    hosts.push(host)
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await tick(50)
+    expect(host.opened).toEqual(['s2'])
+    expect(kindOf(service, 's1')).toBe('normal') // expired on time
+    expect(kindOf(service, 's2')).toBe('settled')
+    const blocked = Symbol('blocked')
+    expect(await Promise.race([internals(service).sweep(), tick(100).then(() => blocked)])).not.toBe(blocked)
+    expect((service as unknown as { timer: unknown }).timer).toBeDefined()
+    release()
+    await service.ready
+    expect(kindOf(service, 's2')).toBe('settled') // nothing happened after the park
   })
 
   it('still expires a due Snooze at startup and retries a failed replay without waking early', async () => {
@@ -506,7 +540,7 @@ describe('missed-activity verification after a restart (#2)', () => {
     appendStored(first.host, 's2', 'user/message', { source: { kind: 'user' } })
     await tick(50)
     const second = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
-    await internals(second.service).sweep()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
     expect(kindOf(second.service, 's1')).toBe('normal')
     expect(second.service.listTransitions(10).filter(entry => entry.sessionId === 's1' && entry.from === 'snoozed')).toMatchObject([{ reason: 'snooze-expired' }])
     // s2's log cannot be read: it stays settled and is retried with backoff.
@@ -516,7 +550,7 @@ describe('missed-activity verification after a restart (#2)', () => {
     expect(retry!.at - Date.now()).toBeGreaterThan(50_000)
     expect(seenRevisions(storage).s2).toBe('"r1"')
     const opens = second.host.opened.length
-    await internals(second.service).sweep() // within the backoff
+    await internals(second.service).sweep(); await internals(second.service).verifyDue() // within the backoff
     expect(second.host.opened).toHaveLength(opens)
     expect(kindOf(second.service, 's2')).toBe('settled')
     // A failed pending read alone cannot rule a wake out either.
@@ -524,14 +558,14 @@ describe('missed-activity verification after a restart (#2)', () => {
     second.host.projectionsFail = true
     internals(second.service).unverified.set('s2', { ...retry!, at: 0 })
     logs.get('s2')!.events.pop()
-    await internals(second.service).sweep()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
     expect(kindOf(second.service, 's2')).toBe('settled')
     expect(internals(second.service).unverified.get('s2')?.failures).toBe(2)
     // Once both reads succeed, the retry applies the real wake.
     second.host.projectionsFail = false
     appendStored(second.host, 's2', 'user/message', { source: { kind: 'user' } })
     internals(second.service).unverified.set('s2', { ...internals(second.service).unverified.get('s2')!, at: 0 })
-    await internals(second.service).sweep()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
     expect(kindOf(second.service, 's2')).toBe('normal')
     expect(missed(second.service)).toHaveLength(1)
     expect(internals(second.service).unverified.has('s2')).toBe(false)
