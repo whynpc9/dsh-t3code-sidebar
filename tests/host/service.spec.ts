@@ -3,18 +3,22 @@ import type { Context } from '@deepseek-ai/cordis'
 import { durablePendingOf, nearestSnoozeDeadline, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
 import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
-import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
+import { appendStored, createFakeHost, MemoryDomainFacility, type FakeHost, type StoredLog } from './fake-host.ts'
 
 const HOUR = 3_600_000
 let hosts: FakeHost[] = []
 
-async function boot(storage?: MemoryDomainFacility, revisions: Record<string, string> = {}, createdAt = Date.now() - 1000) {
+async function boot(
+  storage?: MemoryDomainFacility, revisions: Record<string, string> = {}, createdAt = Date.now() - 1000,
+  setup?: (host: FakeHost) => void,
+) {
   const host = createFakeHost(storage)
   host.headers.push(
     { id: 's1', createdAt, revision: revisions.s1 },
     { id: 's2', createdAt, revision: revisions.s2 },
     { id: 'child', createdAt: 0, origin: 'subagent' },
   )
+  setup?.(host)
   await (host.ctx as Context).plugin(T3SidebarService)
   const service = await new Promise<T3SidebarService>((resolve) => {
     const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
@@ -172,10 +176,15 @@ describe('T3SidebarService', () => {
 
   it('surfaces Settled and Snoozed tasks whose session changed while the plugin was away', async () => {
     const storage = new MemoryDomainFacility()
-    const first = await boot(storage, { s1: 'r1', s2: 'r1' })
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
     await first.service.command(command({ sessionId: 's1', action: { kind: 'settle' } }))
     await first.service.command(command({ sessionId: 's2', action: { kind: 'snooze', until: Date.now() + HOUR } }))
-    const second = await boot(storage, { s1: 'r2', s2: 'r2' })
+    // While the plugin is away: new human input in s1, a failed turn in s2.
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } })
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    const second = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, host => { host.logs = logs })
     const tasks = second.service.getSnapshot(1).tasks
     expect(tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
     expect(tasks.find(task => task.sessionId === 's2')?.record).toMatchObject({ disposition: { kind: 'normal' } })
@@ -296,25 +305,29 @@ describe('T3SidebarService', () => {
     const { service, host } = await boot(storage, { s1: 'r1', s2: 'r1' })
     await service.command(command({ action: { kind: 'settle' } }))
     storage.failTableWrites = true
-    ;(host.ctx as unknown as { emit(name: string, ...args: unknown[]): void })
-      .emit('session/event', { id: 's1' }, { type: 'user/message', seq: 60, time: Date.now(), data: { source: { kind: 'user' } } })
+    // Persisted by the Host, but the plugin's fold of it cannot be saved.
+    const input = appendStored(host, 's1', 'user/message', { source: { kind: 'user' } })
+    ;(host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's1' }, input)
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('settled')
     storage.failTableWrites = false
     host.headers[0]!.revision = 'r2'
     await (service as unknown as { refreshHeaders(): Promise<void> }).refreshHeaders()
+    await (service as unknown as { verifyDue(): Promise<void> }).verifyDue()
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
   })
 
   it('retries a missed-activity catch-up whose task write failed', async () => {
     const storage = new MemoryDomainFacility()
-    const first = await boot(storage, { s1: 'r1', s2: 'r1' })
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
     await first.service.command(command({ sessionId: 's1', action: { kind: 'settle' } }))
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } })
     storage.failTableWrites = true
-    const second = await boot(storage, { s1: 'r2', s2: 'r1' })
+    const second = await boot(storage, { s1: 'r2', s2: 'r1' }, undefined, host => { host.logs = logs })
     expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('settled')
     storage.failTableWrites = false
-    const third = await boot(storage, { s1: 'r2', s2: 'r1' })
+    const third = await boot(storage, { s1: 'r2', s2: 'r1' }, undefined, host => { host.logs = logs })
     expect(third.service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.disposition.kind).toBe('normal')
   })
 
@@ -326,6 +339,296 @@ describe('T3SidebarService', () => {
     host.activity.set('s1', [])
     await (service as unknown as { sweep(): Promise<void> }).sweep()
     expect(service.getSnapshot(1).tasks[0]?.activity).toEqual([])
+  })
+})
+
+describe('missed-activity verification after a restart (#2)', () => {
+  type Internals = {
+    refreshHeaders(): Promise<void>
+    sweep(): Promise<void>
+    verifyDue(): Promise<void>
+    unverified: Map<string, { token: string; failures: number; at: number }>
+  }
+  const internals = (service: T3SidebarService) => service as unknown as Internals
+  const kindOf = (service: T3SidebarService, id: string) =>
+    service.getSnapshot(1).tasks.find(task => task.sessionId === id)?.record.disposition.kind
+  const revisionOf = (service: T3SidebarService, id: string) =>
+    service.getSnapshot(1).tasks.find(task => task.sessionId === id)?.record.revision ?? 0
+  const missed = (service: T3SidebarService) => service.listTransitions(100).filter(entry => entry.reason === 'missed-activity')
+  const seenRevisions = (storage: MemoryDomainFacility) =>
+    (storage.data.get('t3_sidebar')!.global as { seenRevisions: Record<string, string> }).seenRevisions
+  const settle = async (service: T3SidebarService, sessionId: string) =>
+    expect(await service.command(command({ sessionId, expectedRevision: revisionOf(service, sessionId), action: { kind: 'settle' } })))
+      .toMatchObject({ ok: true })
+  const snoozeFor = async (service: T3SidebarService, sessionId: string, ms: number) =>
+    expect(await service.command(command({ sessionId, expectedRevision: revisionOf(service, sessionId), action: { kind: 'snooze', until: Date.now() + ms } })))
+      .toMatchObject({ ok: true })
+  const quit = async (host: FakeHost) => {
+    await (host.ctx as unknown as { registry: { dispose?: () => unknown } }).registry?.dispose?.()
+    hosts = hosts.filter(entry => entry !== host)
+  }
+  const tick = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+  it('keeps sessions created and parked before their first header refresh parked across a restart', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await tick(2)
+    const createdAt = Date.now()
+    const fresh = [{ id: 'n1', createdAt, revision: 'n1-a' }, { id: 'n2', createdAt, revision: 'n2-a' }]
+    first.host.headers.push(...fresh)
+    // Live events: committed by the Host (stored) and observed by the plugin.
+    const live = (id: string, type: string, data: unknown) => {
+      const event = appendStored(first.host, id, type, data)
+      ;(first.host.ctx as unknown as { emit(name: string, ...args: unknown[]): void })
+        .emit('session/event', { id, header: { id, createdAt } }, event)
+    }
+    live('n1', 'user/message', { source: { kind: 'user' } })
+    live('n1', 'turn/start', { turn: 1 })
+    live('n1', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    live('n2', 'user/message', { source: { kind: 'user' } })
+    live('n2', 'turn/start', { turn: 1 })
+    live('n2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    await tick(30)
+    await snoozeFor(first.service, 'n1', HOUR)
+    await settle(first.service, 'n2')
+    expect(await first.service.command(command({ sessionId: 'n2', expectedRevision: revisionOf(first.service, 'n2'), action: { kind: 'reopen' } })))
+      .toMatchObject({ ok: true })
+    await settle(first.service, 'n2')
+    // Title events observed live after parking, then ⌘Q before the ten-minute refresh.
+    live('n1', 'session/title', { title: 'one' })
+    live('n2', 'session/title', { title: 'two' })
+    await tick(10)
+    expect(seenRevisions(storage)).not.toHaveProperty('n1')
+    await quit(first.host)
+
+    const second = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, (host) => {
+      host.logs = logs
+      host.headers.push({ ...fresh[0]!, revision: 'n1-b' }, { ...fresh[1]!, revision: 'n2-b' })
+    })
+    expect(kindOf(second.service, 'n1')).toBe('snoozed')
+    expect(kindOf(second.service, 'n2')).toBe('settled')
+    expect(missed(second.service)).toHaveLength(0)
+    expect(second.host.opened.sort()).toEqual(['n1', 'n2'])
+    // Verified: the tokens are acknowledged, so the next refresh replays nothing.
+    expect(seenRevisions(storage)).toMatchObject({ n1: '"n1-b"', n2: '"n2-b"' })
+    await internals(second.service).refreshHeaders()
+    expect(second.host.opened).toHaveLength(2)
+  })
+
+  it('keeps registered sessions parked when only a title or file metadata changed', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    // History from before the plugin was installed; the summary never folded it.
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } }, Date.now() - HOUR)
+    appendStored(first.host, 's1', 'turn/start', { turn: 1 }, Date.now() - HOUR)
+    await settle(first.service, 's1')
+    await snoozeFor(first.service, 's2', HOUR)
+    appendStored(first.host, 's1', 'session/title', { title: 'renamed' }) // title only
+    await quit(first.host)
+    // s2: same log, new token (e.g. a chmod changed ctimeNs).
+    const second = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, host => { host.logs = logs })
+    expect(kindOf(second.service, 's1')).toBe('settled')
+    expect(kindOf(second.service, 's2')).toBe('snoozed')
+    expect(missed(second.service)).toHaveLength(0)
+    expect(seenRevisions(storage)).toMatchObject({ s1: '"r2"', s2: '"r2"' })
+  })
+
+  it('wakes a parked session exactly once when a persisted event after the park meets the wake rules', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await settle(first.service, 's1')
+    await snoozeFor(first.service, 's2', HOUR)
+    await quit(first.host)
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } })
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    const second = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, host => { host.logs = logs })
+    expect(kindOf(second.service, 's1')).toBe('normal')
+    expect(kindOf(second.service, 's2')).toBe('normal')
+    const tasks = second.service.getSnapshot(1).tasks
+    expect(tasks.find(task => task.sessionId === 's1')?.record.activity.lastUserInputAt).not.toBeNull()
+    expect(tasks.find(task => task.sessionId === 's2')?.record.activity.lastTurnEnd).toMatchObject({ reason: 'error' })
+    expect(missed(second.service)).toHaveLength(2)
+    await internals(second.service).refreshHeaders()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    const third = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, host => { host.logs = logs })
+    expect(missed(third.service)).toHaveLength(2)
+  })
+
+  it('wakes a Snooze on an offline failure even when a later turn succeeded', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's2', HOUR)
+    await quit(first.host)
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    appendStored(first.host, 's2', 'turn/start', { turn: 2 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+    const second = await boot(storage, { s1: 'r1', s2: 'r2' }, undefined, host => { host.logs = logs })
+    expect(kindOf(second.service, 's2')).toBe('normal')
+    // The summary still records everything replayed.
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record.activity.lastTurnEnd)
+      .toMatchObject({ reason: 'completed' })
+    expect(missed(second.service)).toHaveLength(1)
+  })
+
+  it('wakes on an offline failure even after a later successful turn was folded live', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's2', HOUR)
+    await quit(first.host)
+    appendStored(first.host, 's2', 'turn/start', { turn: 1 })
+    appendStored(first.host, 's2', 'turn/end', { turn: 1, reason: { kind: 'error' } })
+    const second = await boot(storage, { s1: 'r1', s2: 'r2' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
+    expect(kindOf(second.service, 's2')).toBe('snoozed')
+    // A background turn succeeds live while the replay awaits its retry.
+    const emit = (type: string, data: unknown) => (second.host.ctx as unknown as { emit(name: string, ...args: unknown[]): void })
+      .emit('session/event', { id: 's2' }, appendStored(second.host, 's2', type, data))
+    emit('turn/start', { turn: 2 })
+    emit('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    await tick(30)
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record)
+      .toMatchObject({ disposition: { kind: 'snoozed' }, activity: { lastTurnEnd: { seq: 3, reason: 'completed' } } })
+    second.host.replayFail = false
+    internals(second.service).unverified.set('s2', { ...internals(second.service).unverified.get('s2')!, at: 0 })
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(second.service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record)
+      .toMatchObject({ disposition: { kind: 'normal' }, activity: { lastTurnEnd: { seq: 3, reason: 'completed' } } })
+    expect(missed(second.service)).toHaveLength(1)
+  })
+
+  it('keeps an outstanding verification after an unrelated live event such as a rename', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await settle(first.service, 's1')
+    await quit(first.host)
+    appendStored(first.host, 's1', 'user/message', { source: { kind: 'user' } }) // offline input
+    const second = await boot(storage, { s1: 'r2', s2: 'r1' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
+    expect(kindOf(second.service, 's1')).toBe('settled')
+    const title = appendStored(second.host, 's1', 'session/title', { title: 'renamed' })
+    ;(second.host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's1' }, title)
+    second.host.headers[0]!.revision = 'r3'
+    await internals(second.service).refreshHeaders()
+    expect(internals(second.service).unverified.get('s1')).toMatchObject({ token: '"r3"' })
+    expect(seenRevisions(storage).s1).toBe('"r1"')
+    second.host.replayFail = false
+    internals(second.service).unverified.set('s1', { ...internals(second.service).unverified.get('s1')!, at: 0 })
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(kindOf(second.service, 's1')).toBe('normal')
+    expect(seenRevisions(storage).s1).toBe('"r3"')
+  })
+
+  it('never holds Snooze expiry or the deadline timer behind a slow replay', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's1', 30)
+    await settle(first.service, 's2')
+    await quit(first.host)
+    await tick(50)
+    // Restart while s2's stored log hangs.
+    let release: () => void = () => {}
+    const host = createFakeHost(storage)
+    host.logs = logs
+    host.replayGate = new Promise<void>((resolve) => { release = resolve })
+    host.headers.push({ id: 's1', createdAt: Date.now() - 1000, revision: 'r1' }, { id: 's2', createdAt: Date.now() - 1000, revision: 'r2' })
+    await (host.ctx as Context).plugin(T3SidebarService)
+    hosts.push(host)
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await tick(50)
+    expect(host.opened).toEqual(['s2'])
+    expect(kindOf(service, 's1')).toBe('normal') // expired on time
+    expect(kindOf(service, 's2')).toBe('settled')
+    const blocked = Symbol('blocked')
+    expect(await Promise.race([internals(service).sweep(), tick(100).then(() => blocked)])).not.toBe(blocked)
+    expect((service as unknown as { timer: unknown }).timer).toBeDefined()
+    release()
+    await service.ready
+    expect(kindOf(service, 's2')).toBe('settled') // nothing happened after the park
+  })
+
+  it('discards a verification whose reads predate the user re-parking the session', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await settle(first.service, 's1')
+    await quit(first.host)
+    // Restart: s1 has an open question and its stored log reads slowly.
+    let release: () => void = () => {}
+    const host = createFakeHost(storage)
+    host.logs = logs
+    host.questions.set('s1', [{ callId: 'q1', state: 'open' }])
+    host.replayGate = new Promise<void>((resolve) => { release = resolve })
+    host.headers.push({ id: 's1', createdAt: Date.now() - 1000, revision: 'r2' }, { id: 's2', createdAt: Date.now() - 1000, revision: 'r1' })
+    await (host.ctx as Context).plugin(T3SidebarService)
+    hosts.push(host)
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await tick(30)
+    expect(host.opened).toEqual(['s1'])
+    // Meanwhile the user answers the question and marks the session handled again.
+    host.questions.delete('s1')
+    await settle(service, 's1')
+    release()
+    await service.ready
+    await internals(service).verifyDue() // the stale result was re-queued, not applied
+    expect(kindOf(service, 's1')).toBe('settled')
+    expect(missed(service)).toHaveLength(0)
+    expect(internals(service).unverified.has('s1')).toBe(false)
+    expect(seenRevisions(storage).s1).toBe('"r2"')
+  })
+
+  it('still expires a due Snooze at startup and retries a failed replay without waking early', async () => {
+    const storage = new MemoryDomainFacility()
+    const logs = new Map<string, StoredLog>()
+    const first = await boot(storage, { s1: 'r1', s2: 'r1' }, undefined, host => { host.logs = logs })
+    await snoozeFor(first.service, 's1', 30)
+    await settle(first.service, 's2')
+    await quit(first.host)
+    appendStored(first.host, 's2', 'user/message', { source: { kind: 'user' } })
+    await tick(50)
+    const second = await boot(storage, { s1: 'r2', s2: 'r2' }, undefined, (host) => { host.logs = logs; host.replayFail = true })
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(kindOf(second.service, 's1')).toBe('normal')
+    expect(second.service.listTransitions(10).filter(entry => entry.sessionId === 's1' && entry.from === 'snoozed')).toMatchObject([{ reason: 'snooze-expired' }])
+    // s2's log cannot be read: it stays settled and is retried with backoff.
+    expect(kindOf(second.service, 's2')).toBe('settled')
+    const retry = internals(second.service).unverified.get('s2')
+    expect(retry?.failures).toBe(1)
+    expect(retry!.at - Date.now()).toBeGreaterThan(50_000)
+    expect(seenRevisions(storage).s2).toBe('"r1"')
+    const opens = second.host.opened.length
+    await internals(second.service).sweep(); await internals(second.service).verifyDue() // within the backoff
+    expect(second.host.opened).toHaveLength(opens)
+    expect(kindOf(second.service, 's2')).toBe('settled')
+    // A failed pending read alone cannot rule a wake out either.
+    second.host.replayFail = false
+    second.host.projectionsFail = true
+    internals(second.service).unverified.set('s2', { ...retry!, at: 0 })
+    logs.get('s2')!.events.pop()
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(kindOf(second.service, 's2')).toBe('settled')
+    expect(internals(second.service).unverified.get('s2')?.failures).toBe(2)
+    // Once both reads succeed, the retry applies the real wake.
+    second.host.projectionsFail = false
+    appendStored(second.host, 's2', 'user/message', { source: { kind: 'user' } })
+    internals(second.service).unverified.set('s2', { ...internals(second.service).unverified.get('s2')!, at: 0 })
+    await internals(second.service).sweep(); await internals(second.service).verifyDue()
+    expect(kindOf(second.service, 's2')).toBe('normal')
+    expect(missed(second.service)).toHaveLength(1)
+    expect(internals(second.service).unverified.has('s2')).toBe(false)
+    expect(seenRevisions(storage).s2).toBe('"r2"')
   })
 })
 

@@ -26,12 +26,13 @@ import {
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
 import {
-  DEFAULT_AUTO_SETTLE_DAYS, emptyRecord, known, unknown,
-  type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
+  DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, emptyRecord, known, unknown,
+  type ActivitySummary, type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
 import {
   optionalService,
   type HostLiveSessions, type HostSession, type HostSessionActivity, type HostSessionEvent, type HostSessionHeader,
+  type HostSessionReadHandle,
   type HostProjectionsValue, type HostSessionController, type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
 } from './harness.ts'
 
@@ -43,9 +44,10 @@ const GlobalSchema = z.object({
   /** Grace start applied to every session when the policy was (re)enabled or shortened. */
   policyEligibleSince: z.number(),
   /**
-   * Last persistence change token seen per session. A token that changed while
-   * this plugin observed no event means activity happened while it was not
-   * running (disabled, uninstalled), so the recorded summary may be stale.
+   * Last persistence change token seen (or verified) per session. A token that
+   * changed while this plugin observed no event *may* mean activity happened
+   * while it was not running (disabled, uninstalled, quit before the next
+   * refresh); it is only a hint that triggers verification, never proof.
    */
   seenRevisions: z.record(z.string(), z.string()).default({}),
   /** Native archive set at the last sweep; a session leaving it was restored. */
@@ -81,6 +83,8 @@ const TRANSITIONS_MAX = 1000
 const FOLLOW_BUFFER = 1000
 const ACTIVITY_CONCURRENCY = 2
 const PENDING_READ_TIMEOUT_MS = 5_000
+const REPLAY_TIMEOUT_MS = 10_000
+const REPLAY_CHUNK = 512
 
 type Domain = OpenDomain<TaskRecord, TransitionEntry, GlobalState>
 
@@ -124,6 +128,14 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly expiryRetry = new Map<string, { readonly failures: number; readonly at: number }>()
   /** Sessions whose event fold could not be persisted; catch-up recovers them. */
   private readonly failedFolds = new Set<string>()
+  /**
+   * Parked sessions whose change token moved without observed events: the
+   * token to acknowledge once a replay verified them, and the retry backoff.
+   */
+  private readonly unverified = new Map<string, { readonly token: string; readonly failures: number; readonly at: number }>()
+  private readonly verifying = new Set<string>()
+  /** The verification pass in flight; replay work never runs on the scheduling path. */
+  private verification: Promise<void> | undefined
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -133,7 +145,11 @@ export class T3SidebarService extends TypertRemoteService {
   private disposed = false
   private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
   private markReady: () => void = () => {}
-  /** Settles once storage is open and the startup catch-up has run. */
+  /**
+   * Settles once storage is open and the startup catch-up has run, including
+   * the first verification pass over parked sessions. Snooze expiry and the
+   * scheduler start before that pass and never wait for it.
+   */
   readonly ready: Promise<void> = new Promise((resolve) => { this.markReady = resolve })
 
   constructor(ctx: Context) {
@@ -161,7 +177,7 @@ export class T3SidebarService extends TypertRemoteService {
     this.ctx.effect(() => () => clearInterval(refresh), 't3Sidebar: header refresh')
     // Catch up Snooze expiries and due auto-settles missed while the Host was down.
     void this.sweep()
-    this.markReady()
+    void this.verifyDue().finally(() => this.markReady())
     // Learn which sessions already have background work (jobs, subagents,
     // schedules) so they show as Working and enter the refresh set.
     void this.seedActivity()
@@ -565,10 +581,15 @@ export class T3SidebarService extends TypertRemoteService {
   }
 
   /**
-   * Compare persistence change tokens with the ones last seen. A session that
-   * changed without this process folding any of its events had activity the
-   * summary never saw; its idle window restarts now (conservative: the real
-   * activity time is unknown, but it is no later than now).
+   * Compare persistence change tokens with the ones last seen. A missing or
+   * changed token only says the stored log *may* hold events this process
+   * never folded (a title update or a metadata-only touch changes it too):
+   *
+   * - normal sessions restart their idle window now (conservative: the real
+   *   activity time is unknown, but it is no later than now);
+   * - parked sessions are verified by replaying their log read-only against
+   *   the parking baseline ({@link verifyParked}); they stay parked until a
+   *   replay proves a wake, and their token is acknowledged only once verified.
    */
   private async catchUpMissedActivity(
     stored: Awaited<ReturnType<HostSessionPersistence['list']>>, observed: ReadonlySet<string>,
@@ -578,46 +599,210 @@ export class T3SidebarService extends TypertRemoteService {
       const global = domain.global.get()
       const now = Date.now()
       const seen: Record<string, string> = {}
-      const stale: string[] = []
+      const stale: { readonly sessionId: string; readonly token: string }[] = []
+      const listed = new Set(stored.map(({ header }) => header.id))
+      for (const sessionId of [...this.unverified.keys()]) if (!listed.has(sessionId)) this.unverified.delete(sessionId)
       for (const { header, revision } of stored) {
         if (header.origin === 'subagent' || revision === undefined) continue
         const token = JSON.stringify(revision)
         seen[header.id] = token
         const previous = global.seenRevisions[header.id]
-        if (this.failedFolds.has(header.id)) { stale.push(header.id); continue }
+        // A pending verification stays pending until a replay succeeds: live
+        // events (even a title update) say nothing about the earlier history.
+        if (this.failedFolds.has(header.id) || this.unverified.has(header.id)) { stale.push({ sessionId: header.id, token }); continue }
         // `observedLive` now holds events that committed while the listing ran;
         // they explain a token change too (and stay for the next comparison).
         if (observed.has(header.id) || this.observedLive.has(header.id)) continue
         const changedWhileAway = previous !== undefined
           ? previous !== token
-          // Unknown to us but created after installation: created while we were away.
+          // Unknown to us but created after installation: possibly created while
+          // we were away, or created and parked before its first refresh.
           : global.installedAt > 0 && header.createdAt > global.installedAt && Object.keys(global.seenRevisions).length > 0
-        if (changedWhileAway) stale.push(header.id)
+        if (changedWhileAway) stale.push({ sessionId: header.id, token })
       }
-      for (const sessionId of stale) {
+      const keepPrevious = (sessionId: string): void => {
+        // Not acknowledged: the next refresh compares against the old token again.
         const previous = global.seenRevisions[sessionId]
+        if (previous === undefined) delete seen[sessionId]
+        else seen[sessionId] = previous
+      }
+      for (const { sessionId, token } of stale) {
         const before = this.recordOf(sessionId, now)
-        if (before.policyEligibleSince >= now && before.disposition.kind === 'normal') {
+        if (before.disposition.kind !== 'normal') {
+          keepPrevious(sessionId)
+          const pending = this.unverified.get(sessionId)
+          this.unverified.set(sessionId, { token, failures: pending?.failures ?? 0, at: pending?.at ?? now })
+          continue
+        }
+        this.unverified.delete(sessionId)
+        if (before.policyEligibleSince >= now) {
           this.failedFolds.delete(sessionId)
           continue
         }
-        // The missed events are unknown, so the summary cannot prove "no new
-        // input": surface parked tasks rather than keep them hidden.
-        let record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
-        if (record.disposition.kind === 'snoozed') record = { ...record, disposition: { kind: 'normal' }, lastSnoozeWakeAt: now }
-        else if (record.disposition.kind === 'settled') record = { ...record, disposition: { kind: 'normal' } }
+        const record: TaskRecord = { ...before, policyEligibleSince: now, revision: before.revision + 1 }
         try {
           await this.commit(record, before, 'missed-activity', null)
           this.failedFolds.delete(sessionId)
         } catch {
-          // Not persisted: keep the previous token (or none) so the next
-          // refresh detects the change again and retries the catch-up.
-          if (previous === undefined) delete seen[sessionId]
-          else seen[sessionId] = previous
+          // Not persisted: the next refresh detects the change again and retries.
+          keepPrevious(sessionId)
         }
       }
       await domain.global.set({ ...domain.global.get(), seenRevisions: seen }).catch(() => undefined)
     }).catch(() => undefined)
+    // In the background: stored-log reads can be slow and must not hold up
+    // the header refresh, startup, or Snooze deadlines.
+    void this.verifyDue()
+  }
+
+  /**
+   * Start (or join) one verification pass over every parked session whose
+   * retry instant has come, with bounded concurrency. Entries that become due
+   * while a pass runs are picked up by the next sweep.
+   */
+  private verifyDue(): Promise<void> {
+    this.verification ??= this.runVerifications().catch(() => undefined).finally(() => { this.verification = undefined })
+    return this.verification
+  }
+
+  private async runVerifications(): Promise<void> {
+    const now = Date.now()
+    const due = [...this.unverified]
+      .filter(([sessionId, entry]) => entry.at <= now && !this.verifying.has(sessionId))
+      .map(([sessionId]) => sessionId)
+    for (let index = 0; index < due.length && !this.disposed; index += ACTIVITY_CONCURRENCY) {
+      await Promise.all(due.slice(index, index + ACTIVITY_CONCURRENCY).map(sessionId => this.verifyParked(sessionId)))
+    }
+  }
+
+  /**
+   * Replay one parked session's stored log read-only and read its exact
+   * pending requests, then apply the ordinary wake / reopen rules against the
+   * parking baseline. A read that fails leaves the task parked and retries
+   * with backoff; the change token is acknowledged only after verification.
+   */
+  private async verifyParked(sessionId: string): Promise<void> {
+    const entry = this.unverified.get(sessionId)
+    if (entry === undefined || this.disposed) return
+    this.verifying.add(sessionId)
+    try {
+      // The reads below are judged against the parking they started under.
+      const baseline = JSON.stringify(this.recordOf(sessionId, Date.now()).disposition)
+      const [events, pending] = await Promise.all([this.replayFoldable(sessionId), this.queryDurablePending(sessionId)])
+      if (this.disposed) return
+      const outcome = await this.queue.run(() => this.applyVerification(sessionId, entry.token, baseline, events, pending))
+        .catch((): VerifyOutcome => 'failed')
+      const current = this.unverified.get(sessionId)
+      // A newer token arrived meanwhile: keep that one due for its own check.
+      if (current !== undefined && current.token !== entry.token) return
+      if (outcome === 'verified') {
+        this.unverified.delete(sessionId)
+        this.failedFolds.delete(sessionId)
+      } else if (outcome === 'stale') {
+        // Re-parked while the reads ran: check again (not a failure, no backoff).
+        this.unverified.set(sessionId, { ...entry, at: Date.now() })
+      } else {
+        const failures = entry.failures + 1
+        this.unverified.set(sessionId, { token: entry.token, failures, at: Date.now() + unknownRetryDelay(failures) })
+      }
+    } finally {
+      this.verifying.delete(sessionId)
+    }
+  }
+
+  /**
+   * Runs inside the queue. `stale` when the parking changed since the reads
+   * began (a pending answer read before the user re-parked would make an
+   * already-resolved request look new and undo their command).
+   */
+  private async applyVerification(
+    sessionId: string, token: string, baseline: string,
+    events: readonly FoldableEvent[] | null, pending: Known<readonly PendingSignal[]>,
+  ): Promise<VerifyOutcome> {
+    const domain = this.requireDomain()
+    const now = Date.now()
+    const before = this.recordOf(sessionId, now)
+    const since = parkedSince(before)
+    let verified: boolean
+    if (since === null) {
+      // Reopened meanwhile; the live path owns it from here.
+      verified = true
+    } else if (JSON.stringify(before.disposition) !== baseline) {
+      return 'stale'
+    } else {
+      // Events before the park were in front of the user when they parked it.
+      // Apply the wake rules after every replayed event, as the live path
+      // would have: a later success must not mask an earlier failure. The
+      // replayed history is judged on its own (the rules compare it with the
+      // parking baselines only), so a later live event already folded into
+      // the stored summary cannot hide it either; the record then keeps the
+      // merge of both.
+      const native = this.nativeOf(sessionId)
+      const wakeAt = (summary: TaskRecord['activity']): TaskRecord | null => reconcile(
+        { ...before, activity: summary },
+        { running: unknown, activity: this.cachedActivity({ ...before, activity: summary }), pending, summary },
+        native, now,
+      )
+      let activity = before.activity
+      let history: ActivitySummary = EMPTY_ACTIVITY
+      let woken = wakeAt(activity)
+      for (const event of events ?? []) {
+        if (event.time < since) continue
+        activity = foldActivity(activity, event)
+        const folded = foldActivity(history, event)
+        if (folded === history) continue
+        history = folded
+        woken ??= wakeAt(history)
+      }
+      const replayed: TaskRecord = { ...before, activity }
+      const expired = before.disposition.kind === 'snoozed' && now >= before.disposition.until
+      if (woken !== null) {
+        // The wake is decided by the first waking prefix; the summary keeps everything replayed.
+        await this.commit({ ...woken, activity }, before, expired ? 'snooze-expired' : 'missed-activity', null)
+        verified = true
+      } else {
+        // Without a wake, verification needs both the full replay and an
+        // exact pending read: either missing cannot rule a wake out.
+        verified = events !== null && pending.known
+        if (verified && activity !== before.activity) {
+          await this.commit({ ...replayed, revision: before.revision + 1 }, before, 'missed-activity', null)
+        }
+      }
+    }
+    if (verified) {
+      const global = domain.global.get()
+      await domain.global.set({ ...global, seenRevisions: { ...global.seenRevisions, [sessionId]: token } }).catch(() => undefined)
+    }
+    return verified ? 'verified' : 'failed'
+  }
+
+  /**
+   * Foldable events of one stored log, read in chunks through a `read`
+   * handle (no ownership taken). Fork-inherited events are the parent's
+   * history and are skipped. `null` when the log cannot be read.
+   */
+  private async replayFoldable(sessionId: string): Promise<FoldableEvent[] | null> {
+    const persistence = optionalService<HostSessionPersistence>(this.ctx, 'sessionPersistence')
+    if (persistence?.open === undefined) return null
+    const signal = AbortSignal.timeout(REPLAY_TIMEOUT_MS)
+    let handle: HostSessionReadHandle | undefined
+    try {
+      handle = await persistence.open(sessionId, 'read', { signal })
+      const foldable: FoldableEvent[] = []
+      for (let offset = handle.inheritedEventCount ?? 0; ;) {
+        const { events } = await handle.read(offset, REPLAY_CHUNK, { signal })
+        for (const event of events) {
+          const reduced = toFoldable(event)
+          if (reduced !== null) foldable.push(reduced)
+        }
+        if (events.length < REPLAY_CHUNK) return foldable
+        offset += events.length
+      }
+    } catch {
+      return null
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
   }
 
   private rememberHeader(header: HostSessionHeader): void {
@@ -737,6 +922,9 @@ export class T3SidebarService extends TypertRemoteService {
     }).catch(() => undefined)
     this.fallbackSweepAt = Date.now() + SWEEP_MS
     this.schedule()
+    // 4. Retry parked sessions whose missed-activity verification failed, off
+    //    the scheduling path (the deadline timer is already armed).
+    void this.verifyDue()
   }
 
   // ── Follow stream ─────────────────────────────────────────────────────────
@@ -911,6 +1099,17 @@ export function nearestSnoozeDeadline(
     if (nearest === null || due < nearest) nearest = due
   }
   return nearest
+}
+
+type VerifyOutcome = 'verified' | 'failed' | 'stale'
+
+/** When the current parking began, or `null` for a normal task. */
+function parkedSince(record: TaskRecord): number | null {
+  switch (record.disposition.kind) {
+    case 'snoozed': return record.disposition.setAt
+    case 'settled': return record.disposition.enteredAt
+    case 'normal': return null
+  }
 }
 
 /** Reduce a committed session event to what the activity summary folds. */

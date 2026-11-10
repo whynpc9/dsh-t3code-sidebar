@@ -34,9 +34,23 @@ export interface HostWorkspaceRegistry {
   readonly archivedSessionIds: readonly string[]
 }
 
+/** A `read` handle onto one stored session's append-only event log. */
+export interface HostSessionReadHandle {
+  /** Fork-inherited leading events; they belong to the parent session's history. */
+  readonly inheritedEventCount?: number
+  read(offset?: number, length?: number, options?: { readonly signal?: AbortSignal }): Promise<{ readonly events: readonly HostSessionEvent[] }>
+  close(): Promise<void>
+}
+
 export interface HostSessionPersistence {
-  /** `revision` is an opaque change token: it differs whenever the stored session changed. */
+  /**
+   * `revision` is an opaque change token, comparable only within one service
+   * instance: equal tokens mean an unchanged log, unequal tokens promise
+   * nothing (a title event or a metadata-only touch changes it too).
+   */
   list(): Promise<readonly { readonly header: HostSessionHeader; readonly revision?: unknown }[]>
+  /** `read` access never takes ownership and works while another handle writes. */
+  open?(id: string, access: 'read', options?: { readonly signal?: AbortSignal }): Promise<HostSessionReadHandle>
 }
 
 /** Answer of `sessionController.projections()`: exact values, migration hints, or absent. */
