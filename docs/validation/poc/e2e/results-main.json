@@ -1,0 +1,66 @@
+{
+  "phase": "main",
+  "at": "2026-11-09T07:16:23.374Z",
+  "results": [
+    {
+      "id": "F08.add-project",
+      "pass": true
+    },
+    {
+      "id": "A02.working-while-running",
+      "pass": true,
+      "detail": "{\"section\":\"working\",\"status\":\"running\"}"
+    },
+    {
+      "id": "A02.completed-returns-active",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "F03.failure-visible",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "F03.tool-turn-observed",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "F04.snooze",
+      "pass": true,
+      "detail": "{\"section\":\"snoozed\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "F05.manual-settle",
+      "pass": true,
+      "detail": "{\"section\":\"settled\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "A06.second-window-baseline",
+      "pass": true,
+      "detail": "{\"a\":{\"section\":\"snoozed\",\"status\":\"new-result\"},\"b\":{\"section\":\"settled\",\"status\":\"failed\"}}"
+    },
+    {
+      "id": "A06.second-window-delta",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "F01.view-remembered",
+      "pass": true,
+      "detail": "projects"
+    },
+    {
+      "id": "A11.single-winner",
+      "pass": true
+    }
+  ],
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

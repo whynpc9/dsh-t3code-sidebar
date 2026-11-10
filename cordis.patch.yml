@@ -1,0 +1,7 @@
+# dsh-t3code-sidebar bundle layer: one Loader row. The Host half registers the
+# t3Sidebar task-state service; the browser half (exports["./client"]) is
+# discovered from package.json `dsh.client` and replaces the
+# `sidebar.workspaces` region while keeping ui-workspace's services.
+- insert:
+    - id: t3code-sidebar
+      name: dsh-t3code-sidebar

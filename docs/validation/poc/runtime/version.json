@@ -1,0 +1,12 @@
+{
+  "recordedAt": "2026-11-09T07:16:45.147Z",
+  "dsh": "0.2.2-rc.1",
+  "cordis": "4.1.0",
+  "zod": "4.6.7",
+  "node": "v24.19.0",
+  "platform": "linux (WSL2)",
+  "browser": "chrome-headless-shell 1243 via playwright-core 1.58",
+  "profileTemplate": "web (dsh-base + dsh-web-app)",
+  "plugin": "0.1.0-alpha.0",
+  "model": "scripted Anthropic-Messages mock (tests/fixtures/mock-llm.mjs) behind the DeepSeek-V4.1-Flash route"
+}

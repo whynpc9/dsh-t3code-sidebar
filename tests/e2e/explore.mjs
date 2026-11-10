@@ -1,0 +1,23 @@
+import { chromium } from 'playwright-core'
+import { homedir } from 'node:os'
+const [url, shot, workspace] = process.argv.slice(2)
+const browser = await chromium.launch({ executablePath: `${homedir()}/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell` })
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+const logs = []
+page.on('console', m => logs.push(`[${m.type()}] ${m.text()}`))
+page.on('pageerror', e => logs.push(`[pageerror] ${e.message}`))
+await page.goto(url)
+await page.waitForSelector('[data-t3-sidebar]', { timeout: 30000 })
+await page.getByRole('button', { name: 'Continue' }).click().catch(() => {})
+await page.getByTestId('t3-view-projects').click()
+await page.getByTestId('t3-add-project').click()
+await page.getByLabel('Folder path on the host').fill(workspace)
+await page.getByRole('button', { name: 'Add', exact: true }).click()
+await page.waitForTimeout(1500)
+await page.locator('[data-project] button[aria-label^="New session in"]').first().click()
+await page.waitForTimeout(2000)
+const editors = await page.evaluate(() => [...document.querySelectorAll('textarea,[contenteditable="true"]')].map(e => `${e.tagName} ${e.getAttribute('aria-label')} ${e.getAttribute('placeholder')} ${e.className.slice(0, 40)}`))
+console.log(JSON.stringify(editors))
+await page.screenshot({ path: shot })
+console.log(logs.filter(l => /error|warn/i.test(l)).slice(0, 10).join('\n').slice(0, 2000))
+await browser.close()

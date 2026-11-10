@@ -1,0 +1,21 @@
+import { chromium } from 'playwright-core'
+import { homedir } from 'node:os'
+const [url, shot] = process.argv.slice(2)
+const browser = await chromium.launch({ executablePath: `${homedir()}/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell` })
+const page = await browser.newPage({ viewport: { width: 1280, height: 860 } })
+const logs = []
+page.on('console', m => logs.push(`[${m.type()}] ${m.text().slice(0, 300)}`))
+await page.goto(url)
+await page.waitForSelector('[data-t3-sidebar]', { timeout: 30000 })
+await page.getByRole('button', { name: 'Continue' }).click({ timeout: 3000 }).catch(() => {})
+const row = page.locator('[data-section="active"] [data-status="failed"] .t3sb-row-main').first()
+await row.click({ button: 'right' })
+await page.waitForTimeout(800)
+console.log('menu items:', JSON.stringify(await page.getByRole('menuitem').allInnerTexts()))
+await page.getByRole('menuitem', { name: 'Mark handled', exact: true }).click()
+await page.waitForTimeout(1500)
+console.log('banners:', JSON.stringify(await page.locator('.t3sb-banner').allInnerTexts()))
+console.log('failed row section:', await page.evaluate(() => document.querySelector('[data-status="failed"]')?.closest('[data-section]')?.getAttribute('data-section')))
+await page.screenshot({ path: shot })
+console.log(logs.filter(l => /error|warn|t3/i.test(l)).join('\n').slice(0, 2000))
+await browser.close()
