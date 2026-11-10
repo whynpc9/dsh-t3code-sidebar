@@ -65,6 +65,24 @@ export interface FakeHost {
   projectionsFail: boolean
   /** Runs inside `sessionPersistence.list()` before it answers (to simulate concurrent commits). */
   duringList: (() => void) | null
+  /** Stored event log per session, read through `sessionPersistence.open(id, 'read')`. */
+  logs: Map<string, StoredLog>
+  /** Make stored-log reads fail. */
+  replayFail: boolean
+  /** Session ids opened for reading, in order. */
+  opened: string[]
+}
+
+export interface StoredEvent { type: string; seq: number; time: number; data: unknown }
+export interface StoredLog { inherited: number; events: StoredEvent[] }
+
+/** Append an event to a session's stored log (seq continues the log). */
+export function appendStored(host: FakeHost, sessionId: string, type: string, data: unknown = {}, time = Date.now()): StoredEvent {
+  let log = host.logs.get(sessionId)
+  if (log === undefined) { log = { inherited: 0, events: [] }; host.logs.set(sessionId, log) }
+  const event = { type, seq: log.events.length, time, data }
+  log.events.push(event)
+  return event
 }
 
 export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
@@ -88,9 +106,23 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
       host.duringList?.()
       return headers.map(({ revision, ...header }) => ({ header, revision }))
     },
+    open: async (id: string, access: 'read') => {
+      if (access !== 'read') throw new Error('read only')
+      host.opened.push(id)
+      if (host.replayFail) throw new Error('log unavailable')
+      const log = host.logs.get(id) ?? { inherited: 0, events: [] }
+      return {
+        inheritedEventCount: log.inherited,
+        read: async (offset = 0, length?: number) => {
+          if (host.replayFail) throw new Error('log unavailable')
+          return { events: log.events.slice(offset, length === undefined ? undefined : offset + length) }
+        },
+        close: async () => {},
+      }
+    },
   })
   ;(ctx as unknown as { on: (name: string, fn: unknown) => void }).on('workspace/session-activity',
     async ({ sessionId }: { sessionId: string }, next: () => Promise<readonly { kind: string }[]>) =>
       [...(activity.get(sessionId) ?? []).map(kind => ({ kind })), ...await next()])
-  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false })
+  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false, logs: new Map(), replayFail: false, opened: [] })
 }
