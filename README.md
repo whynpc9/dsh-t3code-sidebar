@@ -19,17 +19,23 @@
 
 插件尚未发布到 npm。请只在新建的测试 profile 中安装预构建 tarball：
 
+包管理器统一为 pnpm（`packageManager` 字段固定版本，锁文件为 `pnpm-lock.yaml`）：
+
 ```sh
-npm install
-npm run verify        # typecheck、测试、构建、pack 检查
-npm pack              # 生成 dsh-t3code-sidebar-<version>.tgz
+pnpm install --frozen-lockfile
+pnpm run verify       # typecheck、测试、构建、pack 检查
+pnpm pack             # 生成 dsh-t3code-sidebar-<version>.tgz
 dsh plugin --profile <测试 profile> add "$PWD/dsh-t3code-sidebar-<version>.tgz"
 dsh --profile <测试 profile>
 ```
 
-卸载：`dsh plugin --profile <测试 profile> remove dsh-t3code-sidebar`。卸载后原生侧栏恢复，会话与聊天记录不受影响；插件自己的任务元数据（`t3_sidebar` 存储域）保留，重新安装后继续生效。
+升级：`plugin add` 对**相同版本号**的 tarball 不做任何更新（dsh 0.2.2-rc.1 实测）。升级测试必须提升 `version`，或先 `remove` 再 `add`。
 
-运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器）。
+卸载 / 回滚：`dsh plugin --profile <测试 profile> remove dsh-t3code-sidebar`，回滚即重新 `add` 旧版本 tarball。卸载后原生侧栏恢复，会话与聊天记录不受影响；插件自己的任务元数据（`t3_sidebar` 存储域）保留，重新安装后继续生效。
+
+运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器），设置面板显示原因。Host 暂时不可达（断线、5xx）时不会切换到本地预览，而是显示“正在重试”并继续连接 Host。
+
+已验证平台：Linux Web（WSL2，dsh 0.2.2-rc.1，最近一次 2026-11-11）。macOS Desktop 尚未验证；`engines.dsh` 声明的 `<0.3.0` 上限内，除 0.2.2-rc.1 以外的版本均未实测。详见 [验证记录](docs/validation/poc/README.md)。
 
 ## 功能概览
 

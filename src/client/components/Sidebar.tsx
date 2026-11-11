@@ -166,6 +166,7 @@ export function TaskSidebar({ runtime, wide = true, useSectionScroller }: Sideba
         </label>
       </div>
       {backend.status === 'stale' && <div className="t3sb-banner" role="status">{t('stale')}</div>}
+      {backend.kind === 'connecting' && backend.failure === 'transient' && <div className="t3sb-banner" role="status" title={backend.reason ?? undefined}>{t('connecting.retry')}</div>}
       {notice !== null && <div className="t3sb-banner" role="status" key={notice.seq}>{notice.text}</div>}
       {currentOutOfScope && (
         <div className="t3sb-banner">
@@ -434,6 +435,7 @@ function toLocalInput(at: number): string {
 
 function SnoozeDialog({ runtime, sessionId, now }: { runtime: Runtime; sessionId: string; now: number }) {
   const t = runtime.t
+  const ready = use(runtime.backend).status === 'ready'
   const [value, setValue] = useState(() => toLocalInput(snoozePresets(now).find(preset => preset.id === 'tomorrow-09')?.until ?? now + 3_600_000))
   const [error, setError] = useState<string | null>(null)
   const close = () => runtime.snoozeRequest.set(null)
@@ -454,7 +456,7 @@ function SnoozeDialog({ runtime, sessionId, now }: { runtime: Runtime; sessionId
       {error !== null && <p className="t3sb-error" role="alert">{error}</p>}
       <div className="t3sb-actions">
         <button type="button" onClick={close}>{t('snooze.cancel')}</button>
-        <button type="button" data-primary="true" onClick={() => { void submit() }}>{t('snooze.confirm')}</button>
+        <button type="button" data-primary="true" disabled={!ready} onClick={() => { void submit() }}>{t('snooze.confirm')}</button>
       </div>
     </div>
   )
@@ -485,12 +487,19 @@ function SettingsPanel({ runtime, onClose }: { runtime: Runtime; onClose: () => 
   const save = async () => {
     const clamped = Math.min(90, Math.max(1, Math.round(days)))
     const result = await runtime.setPolicy(enabled ? clamped : null, keepFailures)
-    setMessage(result.ok ? t('settings.saved') : t('error.generic', { code: result.code }))
+    if (result.ok) { setMessage(t('settings.saved')); return }
+    const key = `error.${result.code}` as Key
+    setMessage(t(key) === key ? t('error.generic', { code: result.code }) : t(key))
   }
   return (
     <div className="t3sb-panel" role="dialog" aria-label={t('settings.title')} onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}>
       <h2>{t('settings.title')}</h2>
-      <p data-testid="t3-backend-note">{host ? t('settings.backend.host') : t('settings.backend.local')}</p>
+      <p data-testid="t3-backend-note">
+        {host ? t('settings.backend.host') : backend.kind === 'local' ? t('settings.backend.local') : t('settings.backend.connecting')}
+        {backend.kind === 'local' && backend.failure !== null && backend.failure !== 'transient' && (
+          <> {t(`settings.backend.failure.${backend.failure}` as Key)}</>
+        )}
+      </p>
       {host && (
         <>
           <label><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t('settings.autoSettle')}</label>
@@ -500,7 +509,7 @@ function SettingsPanel({ runtime, onClose }: { runtime: Runtime; onClose: () => 
           <label><input type="checkbox" checked={keepFailures} disabled={!enabled} onChange={event => setKeepFailures(event.target.checked)} />{t('settings.keepFailures')}</label>
           <div className="t3sb-actions">
             {message !== null && <span role="status">{message}</span>}
-            <button type="button" data-primary="true" onClick={() => { void save() }}>{t('settings.save')}</button>
+            <button type="button" data-primary="true" disabled={backend.status !== 'ready'} onClick={() => { void save() }}>{t('settings.save')}</button>
           </div>
           <h2>{t('settings.history')}</h2>
           {history.length === 0 ? <p>{t('settings.historyEmpty')}</p> : (

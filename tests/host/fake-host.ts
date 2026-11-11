@@ -19,6 +19,10 @@ export class MemoryDomainFacility {
   failGlobalWrites = false
   /** Fail only task/transition table writes. */
   failTableWrites = false
+  /** Fail only audit (transitions table) writes, after task writes succeed. */
+  failAuditWrites = false
+  /** When set, global writes wait for it (a slow disk). */
+  globalGate: Promise<void> | null = null
   async open(spec: Spec) {
     let unit = this.data.get(spec.name)
     if (unit === undefined) {
@@ -36,6 +40,7 @@ export class MemoryDomainFacility {
           entries: () => rows.entries(),
           put: async (key: string, value: unknown) => {
             if (facility.failWrites || facility.failTableWrites) throw new Error('disk full')
+            if (facility.failAuditWrites && name === 'transitions') throw new Error('disk full')
             rows.set(key, schema.parse(value))
           },
           delete: async (key: string) => rows.delete(key),
@@ -44,6 +49,7 @@ export class MemoryDomainFacility {
       global: {
         get: () => current.global ?? spec.global!.initial,
         set: async (value: unknown) => {
+          if (facility.globalGate !== null) await facility.globalGate
           if (facility.failWrites || facility.failGlobalWrites) throw new Error('disk full')
           current.global = spec.global!.schema.parse(value)
         },

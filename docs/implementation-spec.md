@@ -220,6 +220,17 @@ v0.1 可采用最多 500 ms 的无关注结束合并窗口减少闪动；审批/
 
 每个插件 follow 流以 `{epoch, streamSeq}` 排序，插件写入另有持久 `dataRevision`。baseline 原子替换；delta 只接受同 epoch 的连续 seq，重复丢弃、断档重取 baseline。断线保留数据并禁用停车写入，显示状态待同步；不把旧 `list.phase=ready` 当作新 generation 已完成。插件和原生目录到达顺序独立，以 join 缓冲待匹配 ID，不创造虚假会话。
 
+Client 侧代次（generation，2026-11-11 落实，见 issue #4）：
+
+- 每个 follow 订阅有一个 generation。`connection/reset`、epoch 变化、seq 断档、本订阅首个 baseline 前的 delta、流结束、命名空间服务被替换/移除、dispose 都开启新 generation；旧流事件和旧 generation 发出的 RPC 回复一律不写当前状态（调用方仍拿到回复结果）。reset 与断档立即重订阅；连续失败（期间没有新 baseline）按退避重试，避免热循环。
+- 只有当前 generation 的 baseline 到达后才是 `ready`。非 ready 时后端对任务命令和策略写入统一返回 `BASELINE_PENDING`，菜单项与设置/Snooze 确认按钮同步禁用。
+- 合并单调：命令回复与 delta 都不能用较低 record revision 覆盖较高者；策略以 revision 单调采用，较旧回复忽略，同 revision 不同内容视为本地副本不可信并立即重订阅。
+- 回复丢失（传输失败或 Gateway 内部错误，无法判断是否已提交）返回客户端专用结果 `UNCONFIRMED`，不报告为“未提交”，并立即重订阅；若丢失发生时更新的 generation 已拿到 baseline（该 baseline 的恢复轮已跑过），则立即在当前 generation 恢复，不依赖下一次偶然重连。新 baseline 到达后以**原 commandId 与原 expectedRevision** 重发：已提交则 Host 依收据重放（`replayed: true`），未提交且记录未变则此时生效，记录已变则 `CONFLICT`；结果经恢复通知告知用户，最多重试 5 次后提示无法确认。自动的浏览器观察唤醒（`background`）不进入此恢复，由唤醒调度器按 revision 自行重试（同样受 CAS 保护）。
+- 策略写入没有收据，且 baseline 快照不排在 Host 队列中尚未完成的写入之后，因此不能凭 baseline 判断“未生效”。恢复改为以**原 expectedRevision 重发**：重发经 Host 串行队列排在任何仍在处理的原请求之后，CAS 结果即权威——成功 → 已生效；`CONFLICT` 且返回值与请求一致 → 原请求已生效（与他人同值并发写无法区分，结果相同）；`CONFLICT` 且值不同 → 已被他处更改。只恢复最近一次丢失的策略写入，最多重试 5 次。
+- 明确在分派前被拒的请求（`gateway/bad-request`、协议不符、HTTP 4xx）确定未生效，直接返回对应错误码而非 `UNCONFIRMED`。
+
+Client 装配：一次 effect 运行拥有一条连接尝试链（AbortSignal 所有者）。Remote 挂载、嵌套 `inject` 作用域（cordis `Fiber`，以 `.dispose()` 释放）、后端、status 订阅、重试计时器都由同一 disposer 释放；失效后才完成的连接会被立即 dispose，迟到的失败不再创建本地后端或订阅。连接失败分类：`missing`（命名空间未出现，或 Web 传输 HTTP 404/405/501——0.2.2-rc.1 上 Host 半边关闭即为 404）、`incompatible`（协议不符 `t3Sidebar/protocol-mismatch`、`gateway/bad-request`、其他 4xx）、`forbidden`（401/403 或权限类错误码）回退浏览器本地预览并在设置中显示原因；`transient`（网络错误、5xx、其他 Gateway 内部错误）只退避重试 Host，不切换到本地预览，避免把任务状态分叉进浏览器。审计（transitions）与 `dataRevision` 是尽力而为的簿记：主记录提交后它们失败不回滚、不把操作报告为失败，审计因此可能有缺口；诊断以任务记录的 `receipts` 与 revision 为准。
+
 订阅先安装再读取/发布初始快照；Host follow 在统一队列中获取 baseline 水位并订阅后续事件，避免 snapshot 与 subscribe 之间的丢更新窗口。限制缓冲，例如 1000 个 delta；消费者落后时结束流并要求全量同步。
 
 UI 操作带 opId；同一会话 disposition 请求串行，失败只回滚该 opId 尚未被新状态替代的乐观值。原生 pin/archive 以宿主回执及快照确认。搜索和 refreshFacts 用 AbortController、generation 防迟到。快捷切换 A→B→A 由 `uiWorkspace` 控制选择，插件不得在旧 Promise 回调重设选中会话。
