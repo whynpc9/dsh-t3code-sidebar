@@ -359,21 +359,84 @@ describe('HostBackend lost replies', () => {
     expect(remote.commands).toHaveLength(6)
   })
 
+  const applied = { revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true }
+  const other = { revision: 1, autoSettleAfterDays: 30, keepUnacknowledgedFailures: false }
   it.each([
-    ['committed', { revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true }],
-    ['not-applied', POLICY],
-    ['superseded', { revision: 1, autoSettleAfterDays: 30, keepUnacknowledgedFailures: false }],
-  ] as const)('settles a lost policy reply from the next baseline: %s', async (outcome, policy) => {
+    // The resend is the Host's answer, not the baseline: a baseline can predate a write still queued on the Host.
+    ['committed', 'resend applies it', { ok: true as const, policy: applied }],
+    ['committed', 'the original committed (CAS fails, same values)', { ok: false as const, code: 'CONFLICT' as const, message: 'policy changed', policy: applied }],
+    ['superseded', 'someone else changed it', { ok: false as const, code: 'CONFLICT' as const, message: 'policy changed', policy: other }],
+  ] as const)('settles a lost policy reply by a CAS resend after the baseline: %s when %s', async (outcome, _why, reply) => {
     const backend = start()
     await ready(backend)
     const write = backend.setPolicy(3, true)
     await flush()
     remote.policies[0]!.reply.reject(new Error('socket closed'))
     expect(await write).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
-    remote.stream.push(baseline('e1', 1, [], policy))
+    // Even a baseline still showing the old revision does not settle it.
+    remote.stream.push(baseline('e1', 1, [], POLICY))
+    await flush()
+    expect(notices).toEqual([])
+    expect(remote.policies).toHaveLength(2)
+    expect(remote.policies[1]!.input).toEqual(remote.policies[0]!.input) // same expected revision
+    remote.policies[1]!.reply.resolve({ ok: true, value: reply })
     await flush()
     expect(notices).toEqual([{ kind: 'policy', outcome }])
-    expect(remote.policies).toHaveLength(1) // policy writes are never resent automatically
-    expect(backend.state.getSnapshot().policy).toEqual(policy)
+    expect(backend.state.getSnapshot().policy).toEqual(reply.policy)
+  })
+
+  it('recovers a command whose reply is lost only after the newer generation\'s baseline', async () => {
+    const backend = start()
+    await ready(backend)
+    const first = backend.command('s1', { kind: 'settle' }, context)
+    await flush()
+    resets.fire()
+    remote.stream.push(baseline('e1', 2, [taskView('s1', 1)]))
+    await flush()
+    expect(backend.state.getSnapshot().status).toBe('ready')
+    remote.commands[0]!.reply.reject(new Error('socket closed'))
+    expect(await first).toMatchObject({ code: 'UNCONFIRMED' })
+    await flush()
+    // Recovered right away in the current generation, without another resubscribe.
+    expect(remote.commands).toHaveLength(2)
+    expect(remote.commands[1]!.input.commandId).toBe(remote.commands[0]!.input.commandId)
+    expect(remote.streams).toHaveLength(2)
+    remote.commands[1]!.reply.resolve({ ok: true, value: { ok: true, task: taskView('s1', 2, 'settled'), dataRevision: 1, replayed: false } })
+    await flush()
+    expect(notices).toEqual([{ kind: 'command', outcome: 'committed', sessionId: 's1' }])
+  })
+
+  it('recovers a policy write whose reply is lost only after the newer generation\'s baseline', async () => {
+    const backend = start()
+    await ready(backend)
+    const write = backend.setPolicy(3, true)
+    await flush()
+    resets.fire()
+    remote.stream.push(baseline('e1', 2))
+    await flush()
+    remote.policies[0]!.reply.reject(new Error('socket closed'))
+    expect(await write).toMatchObject({ code: 'UNCONFIRMED' })
+    await flush()
+    expect(remote.policies).toHaveLength(2)
+    expect(remote.streams).toHaveLength(2)
+    remote.policies[1]!.reply.resolve({ ok: true, value: { ok: true, policy: applied } })
+    await flush()
+    expect(notices).toEqual([{ kind: 'policy', outcome: 'committed' }])
+  })
+
+  it('waits for the pending baseline when a late loss arrives before it', async () => {
+    const backend = start()
+    await ready(backend)
+    const first = backend.command('s1', { kind: 'settle' }, context)
+    await flush()
+    resets.fire()
+    remote.commands[0]!.reply.reject(new Error('socket closed'))
+    await first
+    await flush()
+    expect(remote.commands).toHaveLength(1) // not resent while stale
+    expect(remote.streams).toHaveLength(2) // and no extra resubscribe
+    remote.stream.push(baseline('e1', 2, [taskView('s1', 1)]))
+    await flush()
+    expect(remote.commands).toHaveLength(2)
   })
 })

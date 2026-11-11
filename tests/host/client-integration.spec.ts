@@ -43,12 +43,14 @@ interface Link {
   /** Commit on the Host, then lose the reply (once per armed call). */
   loseNextCommandReply: boolean
   loseNextPolicyReply: boolean
+  /** Fail the next policy call at once, while the Host still processes it. */
+  dropNextPolicyCall: boolean
   /** Drop the next delta this window would receive. */
   dropNextDelta: boolean
 }
 
 function link(service: () => T3SidebarService): { remote: T3Remote; faults: Link } {
-  const faults: Link = { loseNextCommandReply: false, loseNextPolicyReply: false, dropNextDelta: false }
+  const faults: Link = { loseNextCommandReply: false, loseNextPolicyReply: false, dropNextPolicyCall: false, dropNextDelta: false }
   const remote: T3Remote = {
     getSnapshot: async version => ({ ok: true, value: service().getSnapshot(version) }),
     follow(version, signal) {
@@ -67,6 +69,11 @@ function link(service: () => T3SidebarService): { remote: T3Remote; faults: Link
       return { ok: true, value }
     },
     async setPolicy(input) {
+      if (faults.dropNextPolicyCall) {
+        faults.dropNextPolicyCall = false
+        void service().setPolicy(input)
+        throw new Error('connection lost')
+      }
       const value = await service().setPolicy(input)
       if (faults.loseNextPolicyReply) { faults.loseNextPolicyReply = false; throw new Error('connection lost') }
       return { ok: true, value }
@@ -225,7 +232,29 @@ describe('two windows against the Host', () => {
     expect(recordOf(b.backend)).toEqual(committed)
   })
 
-  it('settles a lost policy reply from the next baseline without resending it', async () => {
+  it('does not call a policy write lost while it is still queued on the Host "not saved"', async () => {
+    const storage = new MemoryDomainFacility()
+    const { service } = await boot(storage)
+    const linkA = link(() => service)
+    const a = window(linkA.remote, service)
+    await settle()
+    let release!: () => void
+    storage.globalGate = new Promise<void>((resolve) => { release = resolve })
+    linkA.faults.dropNextPolicyCall = true
+    expect(await a.backend.setPolicy(3, true)).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
+    await settle()
+    // The replacement baseline was taken while the write waited on storage.
+    expect(a.backend.state.getSnapshot().policy.revision).toBe(0)
+    expect(a.notices).toEqual([])
+    storage.globalGate = null
+    release()
+    await settle()
+    expect(a.notices).toEqual([{ kind: 'policy', outcome: 'committed' }])
+    expect(service.getSnapshot(1).policy).toEqual({ revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true })
+    expect(a.backend.state.getSnapshot().policy.revision).toBe(1)
+  })
+
+  it('settles a lost policy reply after the commit through a CAS resend', async () => {
     const { service } = await boot()
     const linkA = link(() => service)
     const a = window(linkA.remote, service)

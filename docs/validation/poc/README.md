@@ -26,11 +26,11 @@
 | 同版本 tarball 再次 `plugin add` | **不更新**：版本号相同时安装为空操作（profile 内仍是旧产物，经哈希确认）。升级测试必须提升版本号，或先 `remove` 再 `add` |
 | `remove` → `add`（重新安装） | `storages/t3_sidebar.json` 在卸载后保留；重新安装、关闭 Host 半边运行一次、再恢复 Host 后，第一次主场景停放的 Snoozed/Settled 仍在（`A04` PASS） |
 
-自动化（`pnpm run verify`，133 项）新增：
+自动化（`pnpm run verify`，137 项，含 PR #5 审阅后补充）新增：
 
-- `tests/client/host-backend.spec.ts`：受控 AsyncIterable / deferred 的代次隔离——reset 后旧流 delta、存活连接上的 seq 断档、epoch 变化、旧 generation 命令回复晚于新 baseline、两个策略回复逆序、同 revision 不同策略、dispose 后 RPC/流/计时器；回复丢失后的原 commandId 重发与策略恢复判定。每例断言最终快照与 ready/stale。
+- `tests/client/host-backend.spec.ts`：受控 AsyncIterable / deferred 的代次隔离——reset 后旧流 delta、存活连接上的 seq 断档、epoch 变化、旧 generation 命令回复晚于新 baseline、两个策略回复逆序、同 revision 不同策略、dispose 后 RPC/流/计时器；回复丢失后的原 commandId 重发、策略 CAS 重发恢复，以及“回复在新 generation 的 baseline 之后才丢失”的恢复。每例断言最终快照与 ready/stale。
 - `tests/client/lifecycle.spec.ts`：真实 Cordis context 上 Client `apply` 启用→停用各 20 次（成功、协议不兼容、mount 超时、停用后迟到失败），以及暂时故障重试、停用后连接才完成、命名空间服务替换、两个实例互不影响；断言 Remote 挂载、slot、菜单、locale、store 订阅、follow 流全部归零。`connectHostBackend` 每条失败路径释放挂载与 inject 作用域。修复了一个实际缺陷：`ctx.inject()` 返回不可调用的 cordis `Fiber`，旧代码以函数调用它，导致探测失败或停用时抛错并跳过 Remote 卸载。
-- `tests/host/client-integration.spec.ts`：两个真实 `HostBackend` 对真实 Host 服务——并发同会话命令（一胜一 `CONFLICT`、双窗口收敛）、提交后回复丢失（`UNCONFIRMED` → 原 commandId 重放，单收据单审计）、仅簿记/审计失败（报告成功、审计缺口）、主写失败（无变化）、follow delta 丢失（断档重订阅收敛）、提交后 Host 重启（持久收据重放）、策略回复丢失。
+- `tests/host/client-integration.spec.ts`：两个真实 `HostBackend` 对真实 Host 服务——并发同会话命令（一胜一 `CONFLICT`、双窗口收敛）、提交后回复丢失（`UNCONFIRMED` → 原 commandId 重放，单收据单审计）、仅簿记/审计失败（报告成功、审计缺口）、主写失败（无变化）、follow delta 丢失（断档重订阅收敛）、提交后 Host 重启（持久收据重放）、策略回复丢失、策略写入仍在 Host 存储排队时取得的新 baseline（不误报“未保存”）。
 
 ## 能力矩阵（G0-C）
 
@@ -47,7 +47,7 @@
 
 ## 自动化结果
 
-- 单元与服务测试：`npm test`，38 项通过（领域纯函数、Host 服务 CAS/幂等/follow/持久化、视图模型）。2026-11-11 增至 133 项，见上节。
+- 单元与服务测试：`npm test`，38 项通过（领域纯函数、Host 服务 CAS/幂等/follow/持久化、视图模型）。2026-11-11 增至 137 项，见上节。
 - 端到端：[`e2e/results-main.json`](e2e/results-main.json)、[`e2e/results-restart.json`](e2e/results-restart.json)，12 项全部 PASS。
 - Host 定时器：Snooze 到期由 Host 定时器唤醒（无需浏览器），`lastSnoozeWakeAt` 等于 deadline，审计记录 `snooze-expired`；Host 停机期间跨过 deadline，重启后补算唤醒（T06）。
 

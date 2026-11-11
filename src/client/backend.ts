@@ -83,7 +83,7 @@ export interface RecoveryNotice {
   /**
    * - `committed`: the operation took effect (originally or on the retry);
    * - `not-applied`: it did not take effect (`code` says why for commands);
-   * - `superseded`: the policy was changed by someone else meanwhile;
+   * - `superseded`: the policy was changed by someone else meanwhile (policy only);
    * - `gave-up`: still unconfirmed after repeated retries.
    */
   readonly outcome: 'committed' | 'not-applied' | 'superseded' | 'gave-up'
@@ -295,9 +295,14 @@ interface PendingCommand {
 }
 
 interface PendingPolicy {
-  readonly expectedRevision: number
-  readonly autoSettleAfterDays: number | null
-  readonly keepUnacknowledgedFailures: boolean
+  readonly input: {
+    readonly protocolVersion: number
+    readonly expectedRevision: number
+    readonly autoSettleAfterDays: number | null
+    readonly keepUnacknowledgedFailures: boolean
+  }
+  attempts: number
+  inFlight: boolean
 }
 
 const samePolicy = (left: TimePolicy, right: TimePolicy): boolean =>
@@ -425,7 +430,7 @@ export class HostBackend implements TaskBackend {
       this.baselineGeneration = generation
       this.attempts = 0
       this.state.set(this.fromSnapshot(event.snapshot))
-      this.recover(event.snapshot)
+      this.recover()
       return
     }
     // A delta before this stream's baseline, from another epoch, or after a
@@ -516,7 +521,7 @@ export class HostBackend implements TaskBackend {
       const message = `result unknown: ${describeFailure(result.error)}`
       if (this.disposed) return { ok: false, code: 'UNCONFIRMED', message, task: null }
       if (pending.track) this.unconfirmed.set(pending.input.commandId, pending)
-      if (generation === this.generation) this.invalidate(true)
+      this.afterLostReply(generation)
       return { ok: false, code: 'UNCONFIRMED', message, task: null }
     }
     this.unconfirmed.delete(pending.input.commandId)
@@ -524,34 +529,66 @@ export class HostBackend implements TaskBackend {
     return result.value
   }
 
+  /**
+   * A reply was lost in `generation`. In the current generation: resubscribe
+   * so a fresh baseline triggers recovery. If a newer generation already has
+   * its baseline, that baseline's recovery pass has run, so recover now;
+   * otherwise the pending baseline will.
+   */
+  private afterLostReply(generation: number): void {
+    if (this.disposed) return
+    if (generation === this.generation) this.invalidate(true)
+    else if (this.isReady()) this.recover()
+  }
+
   async setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyOutcome> {
     const current = this.state.getSnapshot()
     if (!this.isReady()) {
       return { ok: false, code: 'BASELINE_PENDING', message: 'reconnecting: waiting for a fresh baseline', policy: current.policy }
     }
+    return await this.sendPolicy({
+      input: { protocolVersion: PROTOCOL_VERSION, expectedRevision: current.policy.revision, autoSettleAfterDays: days, keepUnacknowledgedFailures: keepFailures },
+      attempts: 0,
+      inFlight: false,
+    })
+  }
+
+  /**
+   * Send a policy write (first attempt or a recovery resend with the same
+   * expected revision). Policy writes carry no receipt, and a baseline is not
+   * ordered after writes still queued on the Host, so recovery does not judge
+   * from a snapshot: the resend passes through the Host's serial queue behind
+   * any outstanding original, and its CAS answer is authoritative.
+   */
+  private async sendPolicy(pending: PendingPolicy): Promise<PolicyOutcome> {
     const generation = this.generation
-    const request: PendingPolicy = { expectedRevision: current.policy.revision, autoSettleAfterDays: days, keepUnacknowledgedFailures: keepFailures }
+    const api = this.api
+    pending.attempts += 1
+    pending.inFlight = true
     let result: RemoteResult<PolicyResult>
     try {
-      if (this.api === null) throw new Error('t3Sidebar namespace unavailable')
-      result = await this.api.setPolicy({ protocolVersion: PROTOCOL_VERSION, ...request })
+      if (api === null) throw new Error('t3Sidebar namespace unavailable')
+      result = await api.setPolicy(pending.input)
     } catch (error) {
       result = { ok: false, error: error as RemoteFailureLike }
+    } finally {
+      pending.inFlight = false
     }
     const latest = this.state.getSnapshot().policy
     if (!result.ok || result.value === undefined) {
       const refused = refusalCode(result.error)
       if (refused !== null) {
+        if (this.unconfirmedPolicy === pending) this.unconfirmedPolicy = null
         return { ok: false, code: refused, message: describeFailure(result.error), policy: latest }
       }
-      // Policy writes carry no receipt: recovery compares the next baseline's
-      // policy with this request (see `recover`); there is no automatic resend.
       const message = `result unknown: ${describeFailure(result.error)}`
       if (this.disposed) return { ok: false, code: 'UNCONFIRMED', message, policy: latest }
-      this.unconfirmedPolicy = request
-      if (generation === this.generation) this.invalidate(true)
+      // Only the most recent lost write is recovered (an older one's CAS would fail anyway).
+      this.unconfirmedPolicy = pending
+      this.afterLostReply(generation)
       return { ok: false, code: 'UNCONFIRMED', message, policy: latest }
     }
+    if (this.unconfirmedPolicy === pending) this.unconfirmedPolicy = null
     if (this.isCurrent(generation)) {
       const state = this.state.getSnapshot()
       const policy = this.nextPolicy(state.policy, result.value.policy)
@@ -560,19 +597,27 @@ export class HostBackend implements TaskBackend {
     return result.value
   }
 
-  /** After a baseline: settle operations whose replies were lost. */
-  private recover(snapshot: Snapshot): void {
+  /** With a fresh baseline: settle operations whose replies were lost. */
+  private recover(): void {
     const pendingPolicy = this.unconfirmedPolicy
-    if (pendingPolicy !== null) {
-      this.unconfirmedPolicy = null
-      const policy = snapshot.policy
-      const outcome = policy.revision === pendingPolicy.expectedRevision
-        ? 'not-applied'
-        // Values equal to the request: ours (or an identical concurrent write; same result).
-        : policy.autoSettleAfterDays === pendingPolicy.autoSettleAfterDays && policy.keepUnacknowledgedFailures === pendingPolicy.keepUnacknowledgedFailures
-          ? 'committed'
-          : 'superseded'
-      this.onRecovery({ kind: 'policy', outcome })
+    if (pendingPolicy !== null && !pendingPolicy.inFlight) {
+      if (pendingPolicy.attempts > MAX_RECOVERY_ATTEMPTS) {
+        this.unconfirmedPolicy = null
+        this.onRecovery({ kind: 'policy', outcome: 'gave-up' })
+      } else {
+        const request = pendingPolicy.input
+        void this.sendPolicy(pendingPolicy).then((outcome) => {
+          if (this.disposed || (!outcome.ok && outcome.code === 'UNCONFIRMED')) return
+          if (outcome.ok) { this.onRecovery({ kind: 'policy', outcome: 'committed' }); return }
+          if (outcome.code !== 'CONFLICT') { this.onRecovery({ kind: 'policy', outcome: 'not-applied', code: outcome.code }); return }
+          // The revision moved: the original write committed (values equal the
+          // request; an identical concurrent write has the same result) or
+          // someone else changed the policy.
+          const same = outcome.policy.autoSettleAfterDays === request.autoSettleAfterDays
+            && outcome.policy.keepUnacknowledgedFailures === request.keepUnacknowledgedFailures
+          this.onRecovery({ kind: 'policy', outcome: same ? 'committed' : 'superseded' })
+        })
+      }
     }
     for (const [commandId, pending] of this.unconfirmed) {
       if (pending.inFlight) continue
