@@ -11,7 +11,7 @@
  * argument is validated with the protocol zod schemas before use.
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import {
@@ -19,7 +19,7 @@ import {
   type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type PolicyResult, type Snapshot,
   type TaskView, type TransitionEntry,
 } from '../contracts/schema.ts'
-import { NAMESPACE, SERVICE_KEY } from '../contracts/remote.ts'
+import { NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
   autoSettle, foldActivity, reconcile, reopen, setPolicyOverride, settle, snooze,
@@ -1038,7 +1038,11 @@ export class T3SidebarService extends TypertRemoteService {
   }
 
   private assertProtocol(version: number): void {
-    if (version !== PROTOCOL_VERSION) throw new Error(`t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`)
+    if (version !== PROTOCOL_VERSION) {
+      // A typed code lets the Client tell an incompatible Host from a transient failure.
+      throw new RemoteError(PROTOCOL_MISMATCH_CODE, `t3Sidebar: protocol ${version} unsupported (Host speaks ${PROTOCOL_VERSION})`,
+        { client: version, host: PROTOCOL_VERSION })
+    }
   }
 }
 

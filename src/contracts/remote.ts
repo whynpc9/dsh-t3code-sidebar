@@ -19,6 +19,15 @@ export const PACKAGE = 'dsh-t3code-sidebar'
 export const NAMESPACE = 't3Sidebar'
 export const SERVICE_KEY = 't3Sidebar'
 
+/** Remote failure code the Host throws when the Client speaks another protocol version. */
+export const PROTOCOL_MISMATCH_CODE = 't3Sidebar/protocol-mismatch'
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    't3Sidebar/protocol-mismatch': { readonly client: number; readonly host: number }
+  }
+}
+
 const strictObject = (schema: ZodType): ZodType =>
   schema instanceof z.ZodObject ? (schema as z.ZodObject).strict() : schema
 

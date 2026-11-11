@@ -2,8 +2,8 @@
  * The object the Client `apply` hands to the slot component: observable
  * sources plus actions. Components never touch `ctx` directly.
  */
-import type { CommandAction, CommandResult, PolicyResult } from '../contracts/schema.ts'
-import type { BackendState } from './backend.ts'
+import type { CommandAction } from '../contracts/schema.ts'
+import type { BackendState, CommandOutcome, PolicyOutcome } from './backend.ts'
 import type { Key } from './locales.ts'
 import type { SessionsSnapshot, StatusSnapshot, WorkspacesSnapshot } from './model.ts'
 import type { Readable, Store } from './store.ts'
@@ -47,8 +47,8 @@ export interface Runtime {
   startSession(workspaceId?: string): void
   unarchive(sessionId: string): void
   openSessionMenu(sessionId: string, displayTitle: string, point: { x: number; y: number }): void
-  command(sessionId: string, action: CommandAction): Promise<CommandResult>
-  setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyResult>
+  command(sessionId: string, action: CommandAction): Promise<CommandOutcome>
+  setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyOutcome>
   listTransitions(limit: number): Promise<readonly { at: number; sessionId: string; from: string; to: string; reason: string }[]>
   search(query: string, signal: AbortSignal): Promise<SearchResult>
   createWorkspace(path: string): Promise<void>

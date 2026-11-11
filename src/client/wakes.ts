@@ -4,7 +4,8 @@
  * must be persisted, or the task would fall back into Snoozed once the request
  * disappears.
  */
-import type { CommandResult, TaskView } from '../contracts/schema.ts'
+import type { TaskView } from '../contracts/schema.ts'
+import type { CommandOutcome } from './backend.ts'
 import { wakeReason } from '../domain/placement.ts'
 import type { NativeState, TaskFacts } from '../domain/types.ts'
 
@@ -35,8 +36,13 @@ export function browserObservedWakes(
 
 const keyOf = (wake: PendingWake): string => `${wake.sessionId}:${wake.revision}`
 
-/** Outcomes worth retrying: the wake may succeed once storage/transport recovers. */
-const TRANSIENT = new Set(['STORAGE_UNAVAILABLE', 'BASELINE_PENDING'])
+/**
+ * Outcomes worth retrying: the wake may succeed once storage/transport
+ * recovers. A retry after UNCONFIRMED is safe: it is revision-checked, so if
+ * the lost attempt was committed the retry is refused (and the record's new
+ * revision no longer asks for this wake).
+ */
+const TRANSIENT = new Set(['STORAGE_UNAVAILABLE', 'BASELINE_PENDING', 'UNCONFIRMED'])
 
 export type Scheduler = (task: () => void, delayMs: number) => () => void
 
@@ -55,7 +61,7 @@ export class WakeDispatcher {
   private disposed = false
 
   constructor(
-    private readonly send: (wake: PendingWake) => Promise<CommandResult>,
+    private readonly send: (wake: PendingWake) => Promise<CommandOutcome>,
     private readonly schedule: Scheduler = (task, delayMs) => { const id = setTimeout(task, delayMs); return () => clearTimeout(id) },
   ) {}
 

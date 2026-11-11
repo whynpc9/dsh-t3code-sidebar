@@ -19,6 +19,8 @@ export class MemoryDomainFacility {
   failGlobalWrites = false
   /** Fail only task/transition table writes. */
   failTableWrites = false
+  /** Fail only audit (transitions table) writes, after task writes succeed. */
+  failAuditWrites = false
   async open(spec: Spec) {
     let unit = this.data.get(spec.name)
     if (unit === undefined) {
@@ -36,6 +38,7 @@ export class MemoryDomainFacility {
           entries: () => rows.entries(),
           put: async (key: string, value: unknown) => {
             if (facility.failWrites || facility.failTableWrites) throw new Error('disk full')
+            if (facility.failAuditWrites && name === 'transitions') throw new Error('disk full')
             rows.set(key, schema.parse(value))
           },
           delete: async (key: string) => rows.delete(key),
