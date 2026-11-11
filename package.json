@@ -3,6 +3,7 @@
   "version": "0.1.0-alpha.0",
   "description": "T3 Code style task sidebar for DeepSeek Harness: Pinned / Active / Working / Snoozed / Settled sections plus a project view.",
   "license": "MIT",
+  "packageManager": "pnpm@11.20.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -44,7 +45,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "TZ=America/New_York vitest run",
     "pack:check": "node scripts/pack-check.mjs",
-    "verify": "npm run typecheck && npm run test && npm run build && npm run pack:check"
+    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
