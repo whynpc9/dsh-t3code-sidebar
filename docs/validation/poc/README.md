@@ -32,6 +32,71 @@
 - `tests/client/lifecycle.spec.ts`：真实 Cordis context 上 Client `apply` 启用→停用各 20 次（成功、协议不兼容、mount 超时、停用后迟到失败），以及暂时故障重试、停用后连接才完成、命名空间服务替换、两个实例互不影响；断言 Remote 挂载、slot、菜单、locale、store 订阅、follow 流全部归零。`connectHostBackend` 每条失败路径释放挂载与 inject 作用域。修复了一个实际缺陷：`ctx.inject()` 返回不可调用的 cordis `Fiber`，旧代码以函数调用它，导致探测失败或停用时抛错并跳过 Remote 卸载。
 - `tests/host/client-integration.spec.ts`：两个真实 `HostBackend` 对真实 Host 服务——并发同会话命令（一胜一 `CONFLICT`、双窗口收敛）、提交后回复丢失（`UNCONFIRMED` → 原 commandId 重放，单收据单审计）、仅簿记/审计失败（报告成功、审计缺口）、主写失败（无变化）、follow delta 丢失（断档重订阅收敛）、提交后 Host 重启（持久收据重放）、策略回复丢失、策略写入仍在 Host 存储排队时取得的新 baseline（不误报“未保存”）。
 
+## 2026-11-11 macOS Desktop 复验（issue #4）
+
+被测代码为 `a913367e17e808821238db2f716c7830672489c5`，与复验开始时的 `origin/main` 一致。宿主为 macOS 26.6.2（25G83，arm64）和 DeepSeek Harness Desktop 0.2.2-rc.1（Electron 44.7.0）。桌面验证由 `gpt-6.1-terra`（High）执行。使用独立 `DSH_HOME`、`desktop` profile 和 Electron `--user-data-dir`。宿主已有日常实例，因此 GUI 使用签名校验通过的官方应用副本，通过独立的 SingletonLock 和专用工作区标记识别测试实例。
+
+`pnpm 11.20.0` 在 Node 24.19.0 上通过 frozen install、137 项测试、类型检查、构建和打包检查。用 Desktop 配套 CLI 的 `plugin --profile desktop add` 安装同一预构建 tgz。安装后检查 Host 与 Client 构建文件的 SHA256，均与 tgz 内文件一致。
+
+| 安装证据 | SHA256 |
+| --- | --- |
+| `dsh-t3code-sidebar-0.1.0-alpha.0.tgz` | `662e1d97b0922db9f99e6009b2f8ac63a952068b9ba8fcdce2024dceaf81168b` |
+| `lib/index.js` | `d09696421e8e977dfd1d1bfddbe99fa4399a58fdaa9be71bafccdde3379de609` |
+| `lib/client.js` | `a39720ff5f312b13f1c26e772b470eb536c75101c5b17659788040a6270075e1` |
+
+| 场景 | 结果 | 证据 |
+| --- | --- | --- |
+| #2/#3 启动扫描后新建并停放 | **通过（Desktop）** | 旧会话已登记，随后通过 Desktop 新建两条会话。脚本化模型完成一条、使另一条失败。成功会话 Snooze 1 小时，失败会话依次标为已处理、重新打开、再标为已处理。退出前 Desktop 显示 Snoozed 1、Settled 1，存储仅登记了旧会话的 revision。 |
+| 十分钟 header 刷新前 ⌘Q、重启 | **通过（Desktop）** | 约 15:28（UTC+8）通过 ⌘Q 退出测试进程。用原隔离 profile 重启后，Desktop 仍显示 Snoozed 1、Settled 1。存储登记的 revision 从 1 条变为 3 条，两条停放记录保留。审计仍为 `manual:snooze`、`manual:settle`、`manual:reopen`、`manual:settle` 四条。 |
+| 离线文件元数据变化 | **通过（Desktop）** | 退出后对 Snoozed 会话的测试日志执行 `chmod`。mtime 和 SHA256（`21ec6efa019c9609645d3438721e6bfe747f79800e97fbe3f3579d0f74fb0581`）不变，ctime 从 `1794381964` 变为 `1794382242`。重启后仍为 Snoozed，无新增唤醒审计。 |
+| 仅标题变更 | **通过（Desktop）** | 插件卸载期间通过原生会话菜单重命名 Settled 会话。该段日志包含 `session/title` 和宿主的 `session/end-seed`，没有新增用户输入或轮次事件。重装并重启后仍为 Settled，无新增唤醒审计。 |
+| 在线真实活动唤醒 | **通过（Desktop）** | 在 Settled 会话提交新消息，Desktop 显示 Active。持久化新增一次 `settled → normal`，原因为 `activity:turn/start`。 |
+| 离线活动回放及审计去重 | **通过（Desktop）** | 再次停放后卸载插件，在原生 Desktop 提交测试消息并持久化轮次。重装并启动后会话恢复为 Active，15:36:31.934（UTC+8）新增一条 `settled → normal`，原因为 `missed-activity`。再次 ⌘Q 重启后仍为 Active，该审计仍只有一条。 |
+| 停机期间 Snooze 到期 | **通过（Desktop）** | 通过自定义 Snooze 界面将一条会话停放至 15:43（UTC+8）。15:42:10 前 ⌘Q 退出，15:43:06 后启动。Desktop 显示 Active 1、Snoozed 1。15:43:25.203 审计记录一条 `snoozed → normal`（`snooze-expired`）。 |
+| 卸载、原生侧栏恢复、重装 | **通过（Desktop）** | 退出后用配套 CLI `plugin remove`，重启实际显示原生 Workspaces 侧栏。仍可打开会话并重命名。重新安装原 tgz 后，`t3_sidebar` 数据和两条停放状态保留。 |
+| 版本递增升级和回退 | **通过（Desktop）** | 在克隆的独立 profile 中，通过配套 CLI 依次 `add` 旧版 alpha.0、当前代码的测试版 alpha.1、旧版 alpha.0。每次启动 Desktop 均显示 Active 2、Snoozed 1，停放和审计保留。回退后的 Host 和 Client 文件与旧包一致。 |
+| Desktop 插件页停用、启用 | **通过（Desktop）** | 当前代码的测试版 alpha.1 在插件页停用后立即恢复原生侧栏，重新启用后立即恢复 T3，原 Snoozed 会话保留。 |
+| 原生目录选择器 | **通过（Desktop）** | 在项目视图调用目录选择器，选中隔离目录并创建项目，Desktop 显示新项目。 |
+| 当前会话定位 | **通过（Desktop）** | 打开会话后输入不匹配的搜索词，界面提示当前会话在筛选范围外。点击 Locate 清除搜索，目标行重新显示并获得焦点。 |
+| 同一 slot 的竞争插件 | **通过（Desktop）** | 另装一个占用 `sidebar.workspaces` 的测试插件（priority `-20`，T3 为 `-10`），只显示测试插件。停用竞争插件后恢复 T3 并保留 Snoozed，继续停用 T3 后恢复原生 Workspaces 侧栏。 |
+| 原生会话搜索和添加工作区快捷键 | **失败（Desktop）** | T3 启用时，⌘K 未聚焦会话搜索，⌘O 未打开目录选择器。对照使用同一应用、profile、会话输入焦点和已安装包，停用 T3 后两项均恢复。 |
+| 规模载入、搜索和活跃轮次 | **通过场景检查（Desktop）** | 独立数据目录预置 100 个工作区，每个 50 条 v4 JSONL Zstandard 合成日志。宿主新增 1 条会话。存储登记 100 个工作区、5001 条会话，界面显示 Active 5001。通过 GUI 重命名一条会话并按新标题搜索，准确命中 1 条。并发提交 50 条慢速测试消息后，脚本化模型收到 50 次请求，界面显示 Working 50、Active 4951。 |
+
+升级旧包来自 `23902a3`（alpha.0，SHA256 `1e357aaa612e6056907b23a526029d805b00b06ce0397bfaba430b4d125f7f76`）。升级包采用 `a913367` 的同一 Host 与 Client 构建，仅为测试将 manifest 版本改为 alpha.1（SHA256 `eb22581673cce4cd0c8df21387af24d1bcb24f9856bc4a6165d78d9e716bd704`）。
+
+竞争插件 `dsh-t3code-slot-validation-fixture@0.0.1`（SHA256 `251aa52128434dbd2d09a5698e6670044eee754bda8a10ad57f516144ef88231`）通过真实 Loader 安装，Client 只注册优先级为 `-20` 的 `sidebar.workspaces` 占位元素。
+
+规模测试通过辅助 Host 插件 `dsh-t3code-scale-load-fixture@0.0.2`（SHA256 `39a3c8e81e8ea053e043f6f74478c862183b05f9183e6decf99e200778549790`）调用 `sessionController.prompt`。16:01:01.701（UTC+8）记录尝试 50、接收 50、拒绝 0。模型桩以 `MOCK_SLOW_MS=180000` 保持轮次活跃。合成日志里的初始标题没有呈现在宿主目录，搜索验证使用 Desktop 实际写入并显示的新标题。
+
+Desktop 的界面截图保存在 Terra 子任务的 CUA 操作记录中。停放、轮次和审计通过隔离 profile 的会话日志和 `storages/t3_sidebar.json` 复核。
+
+重放期间交错的 live 事件、重新停放、pending 读取失败和慢重放与到期竞争已有 Host 层的受控测试，Desktop 上仍待注入和复验。此次实测运行时为 0.2.2-rc.1。
+
+### 快捷键回归最小复现
+
+1. 在 macOS Desktop 0.2.2-rc.1 的隔离 profile 安装并启用 `a913367` 构建。确认 T3 侧栏显示，焦点放在新会话输入框。
+2. 按 ⌘K 和 ⌘O。预期分别聚焦会话搜索、打开目录选择器。实际焦点仍在会话输入框，也未出现目录选择器。
+3. 在插件页停用 T3 并返回同一输入框。按 ⌘K 聚焦原生会话搜索。恢复输入框焦点，再按 ⌘O 打开 macOS 原生目录选择器。
+
+宿主的 `session.search` 和 `workspace.add` 发布供原生 WorkspaceBrowser 消费的请求，T3 获胜时该浏览组件未挂载。项目视图内的目录按钮仍可调用 `pickDirectory`。 [Harness 快捷键注册](https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/packages/client/ui-workspace/src/client/shortcuts.ts#L65-L89)
+
+### 复现环境
+
+从被测提交打包后，先用独立目录启动一次 Desktop 初始化 `desktop` profile，正常退出，再通过同一应用的配套 CLI 安装。测试期间使用同一组目录和本地模型桩。若宿主同时运行日常实例，使用官方应用的签名副本，并在每次发送快捷键前核对测试工作区标记。
+
+```sh
+test_root=$(mktemp -d)
+desktop_app='/Applications/DeepSeek Harness.app' # 或签名校验通过的副本
+desktop_cli="$desktop_app/Contents/Resources/runtime/cli/bin/dsh"
+desktop_bin="$desktop_app/Contents/MacOS/DeepSeek Harness"
+node tests/fixtures/mock-llm.mjs 47900 &
+
+# 首次启动后退出测试实例，再安装并重复此启动命令。
+DSH_HOME="$test_root/home" DEEPSEEK_BASE_URL=http://127.0.0.1:47900 \
+  DEEPSEEK_API_KEY=sk-fixture "$desktop_bin" --user-data-dir="$test_root/userdata"
+DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对路径到 tgz>"
+```
+
 ## 能力矩阵（G0-C）
 
 | 信号 | Client 实时 | Host 实时 | Host 冷启动 | 本插件用法 |
@@ -59,8 +124,8 @@
 | 自动 Settled 的真实跨天迁移 | 最小窗口 1 天；规则与边界由单元测试覆盖（T01–T05、T07、T09），集成层只验证了策略与调度器运行 |
 | A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | M4/M5 |
 | Workspace 级策略覆盖、多 membership 的 `policyWorkspaceId` | P01 剩余部分 |
-| macOS Desktop | M6（Q2）。#2/#3 的 Desktop 实机复验（停放后 ⌘Q 重启、标题/文件元数据变化不唤醒、replay 期间 live 事件等）仍未执行，单测通过不等于 Desktop 通过 |
-| 本次未覆盖的发布门禁 | 版本号递增的升级/回退、规模（100 项目 / 5000 会话 / 50 活跃）与首屏/内存预算、快捷键/目录选择器/竞争 slot 插件、真实断网下的 `connection/reset`（仅有受控测试） |
+| macOS Desktop | M6（Q2）部分完成。#2/#3 的停放后 ⌘Q 重启已通过，其他桌面验收状态见上方 macOS Desktop 复验 |
+| 剩余发布门禁 | 规模下的首屏时间、更新和搜索延迟、DOM 行数、内存及 20 次 Desktop 启停。真实断网下的 `connection/reset` 已有受控测试，仍待实机复验。 |
 | Host 侧严格 codec | Host 走 SRC 分派（无生成器严格描述符），以同一 zod schema 在服务内自行校验；若上游开放外部包的 `./typert` 生成路径再切换 |
 
 ## 复现

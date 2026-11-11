@@ -35,7 +35,7 @@ dsh --profile <测试 profile>
 
 运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器），设置面板显示原因。Host 暂时不可达（断线、5xx）时不会切换到本地预览，而是显示“正在重试”并继续连接 Host。
 
-已验证平台：Linux Web（WSL2，dsh 0.2.2-rc.1，最近一次 2026-11-11）。macOS Desktop 尚未验证；`engines.dsh` 声明的 `<0.3.0` 上限内，除 0.2.2-rc.1 以外的版本均未实测。详见 [验证记录](docs/validation/poc/README.md)。
+Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测。macOS Desktop 0.2.2-rc.1 已通过隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[验证记录](docs/validation/poc/README.md)
 
 ## 功能概览
 

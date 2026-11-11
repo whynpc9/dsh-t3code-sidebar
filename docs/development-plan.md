@@ -40,14 +40,16 @@
 | U01–U04 任务视图与动作 | 完成（alpha） | 五分区、行状态、当前项定位、原生菜单内的 Snooze/已处理/重新打开、自定义时间对话框 |
 | U05 搜索与筛选 | 完成（alpha） | 项目筛选、标题即时过滤、正文搜索（防抖与迟到丢弃）；A07 竞态未做自动化 |
 | U06 项目视图 | 完成（alpha） | 分组、空项目、新建会话、添加/重命名/移除项目；目录选择用 `pickDirectory` 或路径输入 |
-| U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、菜单键、aria 标签、reduced-motion；读屏与焦点保持未验收 |
+| U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、菜单键、aria 标签、reduced-motion；Desktop 已复现启用 T3 后 ⌘K 和 ⌘O 失效，读屏与焦点保持未验收 |
 | S01 设置与诊断 | 部分 | 设置面板位于侧栏内（非 Harness 设置卡），显示后端类型与审计记录；插件未接管槽位时的独立诊断入口未做 |
 | P01–P04 时间策略 | 部分 | 全局策略、会话级禁用、调度器、到期补算、审计；Workspace 级覆盖与“确认结果”未做 |
 | Q01 | 进行中 | 137 项单元/服务/集成测试 + 12 项端到端 |
-| Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停（成功、不兼容、超时、迟到失败）无资源增长；真实 Loader 的卸载→重装与元数据保留已测；版本递增的升级/回退未测（同版本 `add` 不更新，见验证记录） |
-| Q02 / R01 / M6 | 未开始 | 规模测试、发行文档、macOS Desktop（含 #2/#3 实机复验） |
+| Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
+| Q02 | 部分 | Desktop 已载入 100 工作区、5000 条合成会话，并观察到 50 条并发轮次与标题搜索命中。性能预算和反复启停仍待实测 |
+| R01 | 未开始 | 发行文档和发布门禁 |
+| M6 | 部分 | macOS Desktop 0.2.2-rc.1 已通过 #2/#3 的 ⌘Q 重启主线、标题与元数据对照、语义唤醒和到期补算。⌘K / ⌘O 回归已复现。 |
 
-issue #4（2026-11-11）：A 连接代次、B 装配/失败路径、C 提交与恢复的自动化证据已落实；E 中锁文件（pnpm 11 `--frozen-lockfile` 因缺根 peer 条目失败，已重现并修复）、单一包管理器与 CI 已完成，Linux Web 真实 Loader 安装/重启/回退已复验。D（macOS Desktop 复验）与 E 中升级回退、规模、快捷键/目录/竞争 slot、Desktop 兼容区间仍未执行，见[验证记录](validation/poc/README.md)。
+issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交与恢复已有自动化证据。E 已修复 pnpm 11 的 frozen lockfile，统一包管理器并启用 CI。Linux Web 已复验真实 Loader 安装、重启与回退。D 已在 macOS Desktop 上复验扫描后新建并停放、十分钟内 ⌘Q 重启的场景。Desktop 其余通过范围和待验项见[验证记录](validation/poc/README.md)。
 
 下一步顺序：补审批态端到端与 A07/A08 自动化 → Workspace 级策略（P01）→ C01 回写 Spec → Q02 规模测试 → Q03 → v0.1-preview。
 
@@ -228,7 +230,7 @@ G-ARCHIVE（v0.2）：证明“仍未 pin、仍属于同一 Settled revision、�
 | v0.1-preview（M5） | Linux Web 上 F01–F11、A01–A12、T01–T09、T12 时间部分全部有证据；需要 Host Remote | “Web preview”，列出已验证的运行时版本与平台 |
 | v0.1（M6） | 在 preview 基础上 macOS Desktop 安装、卸载与 GUI 验收通过 | Web + Desktop 正式支持 |
 
-GUI 验证遵守本项目指示：开始验证时解析当前主机最新正式 Terra，显式完整 model ID、High、`fork_turns=none`，并告知实际模型；同一 UI 同时只给一位验证代理。当前规划阶段没有启动 GUI 验证，不能把静态源码审查写成操作通过。
+GUI 验证按本项目指示使用当前宿主支持的最新正式 Terra，显式指定完整 model ID、High 和 `fork_turns=none`，并记录实际模型。同一 UI 由一位验证代理独占。GUI 通过项应有实际操作证据。
 
 测试可使用 fixture provider，无需真实付费 LLM 调用即可验证大多数状态；少量真实运行验证如需配置测试环境，单独列出。测试中的权限、日志和时间策略不能复用生产会话作为可变样本。
 
