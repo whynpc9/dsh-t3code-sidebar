@@ -16,7 +16,7 @@
 | 工期由 23–35 调整为 31–45 工作日（单人顺序执行） | M0 含冷读成本测量和自建构建封装；M2 含五分区+原生动作+停车对话框，原估偏紧；Desktop 验收单列为 M6 |
 | 记录 Q1–Q5 决策 | 允许浏览器本地降级预览；Linux Web 先行、Desktop 后置；能力不足时自动 Settled 默认 Off；包名 `dsh-t3code-sidebar`；单人开发 |
 
-## 执行状态（2026-11-09）
+## 执行状态（2026-11-09，11-11 更新）
 
 **M0 决策：Go。** 四个验证门在 Linux Web 上通过（G0-C 部分通过，足以支持 v0.1 范围），详见 [M0 验证记录](validation/poc/README.md)。当前代码为 R0 内部 alpha `0.1.0-alpha.0`：单元/服务测试 38 项、端到端 12 项全部通过。
 
@@ -31,11 +31,11 @@
 | --- | --- | --- |
 | D01 纯领域函数 | 完成 | 分区、排序、Snooze 预设/DST、自动收起判定、命令转换；单元测试覆盖 T01–T05、T07、T09 |
 | B01 工程骨架 | 完成 | esbuild 双面构建、Loader 封装、签名守卫、pack 检查、MIT LICENSE |
-| B03 测试宿主 | 部分 | 隔离 `DSH_HOME` 安装流程、脚本化模型桩、Playwright 脚本已有；CI 未配置 |
+| B03 测试宿主 | 部分 | 隔离 `DSH_HOME` 安装流程、脚本化模型桩、Playwright 脚本已有；CI（`.github/workflows/verify.yml`：pnpm frozen install + verify）已加，e2e 未进 CI |
 | C01 契约冻结 v1 | 部分 | `src/contracts` 为单一来源（记录、策略、Remote、错误码、审计）；尚未回写实现 Spec 与时间策略 Spec |
 | B02 / D03 Host 事实 | 完成（v1） | 活动 waterfall、事件折叠、Pin/Archive、会话头索引 |
 | D02 存储 | 完成（v1） | `t3_sidebar` 存储域（tasks / transitions / global），CAS、每记录收据、审计上限 1000 |
-| D04 同步 | 完成 | baseline + 连续 delta、断档标记 stale 并重新订阅、多窗口一致 |
+| D04 同步 | 完成 | baseline + 连续 delta、多窗口一致；2026-11-11（#4）加订阅代次：reset/断档/epoch 变化立即重订阅，旧流与旧代次回复不写状态，非 ready 拒绝写入，回复丢失以原 commandId 恢复 |
 | D05 本地后端 | 完成 | localStorage + BroadcastChannel，自动回退并在设置中说明 |
 | U01–U04 任务视图与动作 | 完成（alpha） | 五分区、行状态、当前项定位、原生菜单内的 Snooze/已处理/重新打开、自定义时间对话框 |
 | U05 搜索与筛选 | 完成（alpha） | 项目筛选、标题即时过滤、正文搜索（防抖与迟到丢弃）；A07 竞态未做自动化 |
@@ -43,8 +43,11 @@
 | U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、菜单键、aria 标签、reduced-motion；读屏与焦点保持未验收 |
 | S01 设置与诊断 | 部分 | 设置面板位于侧栏内（非 Harness 设置卡），显示后端类型与审计记录；插件未接管槽位时的独立诊断入口未做 |
 | P01–P04 时间策略 | 部分 | 全局策略、会话级禁用、调度器、到期补算、审计；Workspace 级覆盖与“确认结果”未做 |
-| Q01 | 进行中 | 38 项单元/服务测试 + 12 项端到端 |
-| Q02 / Q03 / R01 / M6 | 未开始 | 规模测试、20 次启停与升级回退、发行文档、macOS Desktop |
+| Q01 | 进行中 | 133 项单元/服务/集成测试 + 12 项端到端 |
+| Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停（成功、不兼容、超时、迟到失败）无资源增长；真实 Loader 的卸载→重装与元数据保留已测；版本递增的升级/回退未测（同版本 `add` 不更新，见验证记录） |
+| Q02 / R01 / M6 | 未开始 | 规模测试、发行文档、macOS Desktop（含 #2/#3 实机复验） |
+
+issue #4（2026-11-11）：A 连接代次、B 装配/失败路径、C 提交与恢复的自动化证据已落实；E 中锁文件（pnpm 11 `--frozen-lockfile` 因缺根 peer 条目失败，已重现并修复）、单一包管理器与 CI 已完成，Linux Web 真实 Loader 安装/重启/回退已复验。D（macOS Desktop 复验）与 E 中升级回退、规模、快捷键/目录/竞争 slot、Desktop 兼容区间仍未执行，见[验证记录](validation/poc/README.md)。
 
 下一步顺序：补审批态端到端与 A07/A08 自动化 → Workspace 级策略（P01）→ C01 回写 Spec → Q02 规模测试 → Q03 → v0.1-preview。
 

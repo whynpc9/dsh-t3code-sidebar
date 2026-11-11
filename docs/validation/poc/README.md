@@ -13,6 +13,25 @@
 
 降级路径也已实测：设置 `DSH_T3_SIDEBAR_HOST=off`（模拟 Host 命名空间不可用）时，Client 自动改用浏览器本地后端，设置面板明确说明“浏览器本地预览”，Snooze 在刷新后仍保留（截图 `browser-only-fallback.png`）。
 
+## 2026-11-11 复验：连接代次、生命周期与发布包（issue #4）
+
+环境同上（`@deepseek-ai/dsh@0.2.2-rc.1`、Linux WSL2、Node 24.19、headless Chromium 1243），新建隔离 `DSH_HOME` 与 `sbtest` profile，模型仍为脚本化桩。被测代码为 issue #4 修复分支；构建可复现，安装到 profile 的产物与仓库构建逐字节一致：`lib/client.js` SHA256 `be3d7d1dd1ab200568badc78762f817b12269767b2e951943395463523cc4ec3`，`lib/index.js` SHA256 `d09696421e8e977dfd1d1bfddbe99fa4399a58fdaa9be71bafccdde3379de609`（tarball 内含 README，文档改动会改变 tarball 本身的哈希，因此记录产物哈希）。
+
+| 步骤 | 结果 |
+| --- | --- |
+| `npm pack` → `dsh plugin --profile sbtest add <tgz>`（真实 Loader） | 安装成功 |
+| 主场景 `scenario.mjs main`（两次：修复中途构建与最终构建） | 11/11 PASS（`F08`、`A02`×2、`F03`×2、`F04`、`F05`、`A06`×2、`F01`、`A11`）；页面错误仅为与 11-09 基线相同的 5 条资源 404 |
+| Host 重启 `scenario.mjs restart` | PASS `A04.host-restart-keeps-parking` |
+| `DSH_T3_SIDEBAR_HOST=off` 回退 `local-backend.mjs` | 首次运行 **FAIL**：真实 runtime 对缺失命名空间返回 `gateway/internal` + “transport failure … HTTP 404”，被新分类当作暂时故障而无限重试。已修正为按 HTTP 状态分类（404 → `missing`）并加入单元测试；最终构建 PASS：回退本地后端、刷新后 Snooze 保留，设置面板显示“原因：Host 任务服务未运行” |
+| 同版本 tarball 再次 `plugin add` | **不更新**：版本号相同时安装为空操作（profile 内仍是旧产物，经哈希确认）。升级测试必须提升版本号，或先 `remove` 再 `add` |
+| `remove` → `add`（重新安装） | `storages/t3_sidebar.json` 在卸载后保留；重新安装、关闭 Host 半边运行一次、再恢复 Host 后，第一次主场景停放的 Snoozed/Settled 仍在（`A04` PASS） |
+
+自动化（`pnpm run verify`，133 项）新增：
+
+- `tests/client/host-backend.spec.ts`：受控 AsyncIterable / deferred 的代次隔离——reset 后旧流 delta、存活连接上的 seq 断档、epoch 变化、旧 generation 命令回复晚于新 baseline、两个策略回复逆序、同 revision 不同策略、dispose 后 RPC/流/计时器；回复丢失后的原 commandId 重发与策略恢复判定。每例断言最终快照与 ready/stale。
+- `tests/client/lifecycle.spec.ts`：真实 Cordis context 上 Client `apply` 启用→停用各 20 次（成功、协议不兼容、mount 超时、停用后迟到失败），以及暂时故障重试、停用后连接才完成、命名空间服务替换、两个实例互不影响；断言 Remote 挂载、slot、菜单、locale、store 订阅、follow 流全部归零。`connectHostBackend` 每条失败路径释放挂载与 inject 作用域。修复了一个实际缺陷：`ctx.inject()` 返回不可调用的 cordis `Fiber`，旧代码以函数调用它，导致探测失败或停用时抛错并跳过 Remote 卸载。
+- `tests/host/client-integration.spec.ts`：两个真实 `HostBackend` 对真实 Host 服务——并发同会话命令（一胜一 `CONFLICT`、双窗口收敛）、提交后回复丢失（`UNCONFIRMED` → 原 commandId 重放，单收据单审计）、仅簿记/审计失败（报告成功、审计缺口）、主写失败（无变化）、follow delta 丢失（断档重订阅收敛）、提交后 Host 重启（持久收据重放）、策略回复丢失。
+
 ## 能力矩阵（G0-C）
 
 | 信号 | Client 实时 | Host 实时 | Host 冷启动 | 本插件用法 |
@@ -28,7 +47,7 @@
 
 ## 自动化结果
 
-- 单元与服务测试：`npm test`，38 项通过（领域纯函数、Host 服务 CAS/幂等/follow/持久化、视图模型）。
+- 单元与服务测试：`npm test`，38 项通过（领域纯函数、Host 服务 CAS/幂等/follow/持久化、视图模型）。2026-11-11 增至 133 项，见上节。
 - 端到端：[`e2e/results-main.json`](e2e/results-main.json)、[`e2e/results-restart.json`](e2e/results-restart.json)，12 项全部 PASS。
 - Host 定时器：Snooze 到期由 Host 定时器唤醒（无需浏览器），`lastSnoozeWakeAt` 等于 deadline，审计记录 `snooze-expired`；Host 停机期间跨过 deadline，重启后补算唤醒（T06）。
 
@@ -40,14 +59,15 @@
 | 自动 Settled 的真实跨天迁移 | 最小窗口 1 天；规则与边界由单元测试覆盖（T01–T05、T07、T09），集成层只验证了策略与调度器运行 |
 | A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | M4/M5 |
 | Workspace 级策略覆盖、多 membership 的 `policyWorkspaceId` | P01 剩余部分 |
-| macOS Desktop | M6（Q2） |
+| macOS Desktop | M6（Q2）。#2/#3 的 Desktop 实机复验（停放后 ⌘Q 重启、标题/文件元数据变化不唤醒、replay 期间 live 事件等）仍未执行，单测通过不等于 Desktop 通过 |
+| 本次未覆盖的发布门禁 | 版本号递增的升级/回退、规模（100 项目 / 5000 会话 / 50 活跃）与首屏/内存预算、快捷键/目录选择器/竞争 slot 插件、真实断网下的 `connection/reset`（仅有受控测试） |
 | Host 侧严格 codec | Host 走 SRC 分派（无生成器严格描述符），以同一 zod schema 在服务内自行校验；若上游开放外部包的 `./typert` 生成路径再切换 |
 
 ## 复现
 
 ```sh
-npm install && npm run verify            # typecheck + test + build + pack check
-npm pack                                 # dsh-t3code-sidebar-<version>.tgz
+pnpm install --frozen-lockfile && pnpm run verify   # typecheck + test + build + pack check
+pnpm pack                                # dsh-t3code-sidebar-<version>.tgz（重复测试请先提升版本号，见上节）
 export DSH_HOME=$(mktemp -d)             # 隔离环境，切勿指向真实 profile
 npx -p @deepseek-ai/dsh@0.2.2-rc.1 dsh sbtest --from-default-profile web --help
 npx -p @deepseek-ai/dsh@0.2.2-rc.1 dsh plugin --profile sbtest add "$PWD/dsh-t3code-sidebar-<version>.tgz"
