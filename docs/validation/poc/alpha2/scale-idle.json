@@ -1,0 +1,156 @@
+{
+  "at": "2026-11-12T15:21:50.224Z",
+  "url": "http://127.0.0.1:47822/?token=…",
+  "activeTurns": 0,
+  "metrics": {
+    "firstRowsMs": 2121,
+    "firstRowsNote": "navigation to first task rows with the Host backend; includes page load and the Host catalog/baseline",
+    "status": {
+      "sessionRows": 6,
+      "allNodes": 117,
+      "sections": {
+        "active": 6
+      }
+    },
+    "heapAfterLoadMb": 35,
+    "viewSwitch": {
+      "timeouts": 0,
+      "n": 30,
+      "p50": 29,
+      "p95": 34,
+      "max": 34
+    },
+    "workspaceView": {
+      "groups": 100,
+      "sessionRows": 6
+    },
+    "flatView": {
+      "sessionRows": 200
+    },
+    "titleSearch": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 16,
+      "p95": 17,
+      "max": 17
+    },
+    "searchRows": 20,
+    "semanticUpdate": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 97,
+      "p95": 115,
+      "max": 144
+    },
+    "semanticUpdateNote": "click → row in its new section, including the Host command round trip and the follow delta",
+    "heapFinalMb": 37.5,
+    "final": {
+      "sessionRows": 6,
+      "allNodes": 117,
+      "sections": {
+        "active": 6
+      }
+    }
+  },
+  "samples": {
+    "viewSwitchMs": [
+      29,
+      33,
+      30,
+      20,
+      31,
+      30,
+      23,
+      28,
+      29,
+      20,
+      30,
+      30,
+      20,
+      31,
+      28,
+      20,
+      30,
+      27,
+      21,
+      31,
+      29,
+      22,
+      34,
+      28,
+      22,
+      34,
+      29,
+      22,
+      34,
+      28
+    ],
+    "titleSearchMs": [
+      17,
+      16,
+      16,
+      16,
+      16,
+      16,
+      17,
+      17,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      17,
+      17
+    ],
+    "semanticUpdateMs": [
+      144,
+      97,
+      98,
+      98,
+      97,
+      97,
+      96,
+      97,
+      96,
+      97,
+      97,
+      96,
+      96,
+      98,
+      115,
+      113,
+      96,
+      100,
+      113,
+      114
+    ],
+    "reloads": [
+      {
+        "firstRowsMs": 1632,
+        "heapMb": 34.8
+      },
+      {
+        "firstRowsMs": 1806,
+        "heapMb": 35.2
+      },
+      {
+        "firstRowsMs": 1798,
+        "heapMb": 36.1
+      },
+      {
+        "firstRowsMs": 1798,
+        "heapMb": 36.7
+      },
+      {
+        "firstRowsMs": 1798,
+        "heapMb": 37.5
+      }
+    ]
+  },
+  "errors": []
+}

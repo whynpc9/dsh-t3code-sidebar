@@ -2,7 +2,7 @@
 
 `dsh-t3code-sidebar` 为 DeepSeek Harness 提供以任务分区为核心的 Sidebar 插件。界面按原生 **Workspaces** 区域的构图复刻（标题、搜索、视图选项、添加工作区，32px 会话行、悬停卡片与悬停操作），并在“分组方式”中新增默认的 **按状态**：T3 Code 风格的 Pinned、Active、Working、Snoozed、Settled 分区；也可按工作区或单列表查看。
 
-当前阶段：**R0 内部 alpha（`0.1.0-alpha.1`）**。M0 四个验证门已在 Linux Web 上通过（[验证记录](docs/validation/poc/README.md)），状态/工作区/单列表分组、Snooze / 已处理、Host 持久化与自动收起调度均已实现并有自动化证据（[原生构图复验](docs/validation/native-ui/README.md)）；尚未达到 v0.1-preview 的完整验收（见[开发计划 · 执行状态](docs/development-plan.md#执行状态2026-11-09)）。目标运行时为 `@deepseek-ai/dsh` `0.2.2-rc.1`。
+当前阶段：**R0 内部 alpha（`0.1.0-alpha.2`）**。M0 四个验证门已在 Linux Web 上通过（[验证记录](docs/validation/poc/README.md)）。状态/工作区/单列表分组、Snooze / 已处理、Host 持久化与自动收起调度、Workspace 级策略、结果确认与策略预览均已实现，并有自动化与 Linux Web 端到端证据（[2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)）。v0.1-preview 尚未达到完整验收，剩余门禁见[发行说明与支持矩阵](docs/release.md)。目标运行时为 `@deepseek-ai/dsh` `0.2.2-rc.1`。
 
 ## 文档
 
@@ -13,6 +13,8 @@
 | [实现 Spec](docs/implementation-spec.md) | 插件边界、数据模型、状态机、API、持久化、失败恢复 |
 | [时间策略 Spec](docs/time-policy-spec.md) | 自动 Settled、Snooze 到期、PR/限额与自动归档计划 |
 | [开发计划](docs/development-plan.md) | 技术验证、任务依赖、里程碑、执行状态与发布门槛 |
+| [发行说明与支持矩阵](docs/release.md) | 已验证的运行时/平台、发布门禁核对、升级与回滚、已知限制 |
+| [CHANGELOG](CHANGELOG.md) | 版本历史 |
 | [M0 验证记录](docs/validation/poc/README.md) | 实测结论、能力矩阵、截图与端到端结果 |
 | [调研结论与证据索引](docs/research/README.md) | 固定上游版本、可行性、来源 |
 
@@ -36,16 +38,18 @@ dsh --profile <测试 profile>
 
 运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器），设置页显示原因。Host 暂时不可达（断线、5xx）时不会切换到本地预览，而是显示“正在重试”并继续连接 Host。
 
-Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测。macOS Desktop 0.2.2-rc.1 已通过隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[验证记录](docs/validation/poc/README.md)
+Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测 alpha.2。macOS Desktop 0.2.2-rc.1 已通过 alpha.0/alpha.1 构建的隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验；alpha.2（含 ⌘K/⌘O 修复）尚未在 Desktop 复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[支持矩阵](docs/release.md)
 
 ## 功能概览
 
 - **原生构图**：与原生 Workspaces 区域相同的标题行（会话/工作区 · 搜索 · 视图选项 · 添加工作区）、行、悬停卡片、“展开其余 N 个会话”、空状态与窄栏。
 - **按状态分组（默认）**：五分区按语义事件排序，空分区不显示；Snoozed/Settled 默认折叠并显示数量；折叠分区仍保留当前会话。
-- **按工作区 / 单列表**：置顶在前、其余按最近更新；Snoozed/Settled 会话留在原位并带图标；可添加、重命名、移除工作区，在工作区内新建会话。
+- **按工作区 / 单列表**：置顶在前、其余按最近更新；Snoozed/Settled 会话留在原位并带图标；可添加、重命名、移除工作区，在工作区内新建会话。单列表以 200 行为窗口随滚动增长（5000 会话下保持流畅）。
 - **行操作**：悬停时显示 “…”（原生会话菜单，含归档）、**收起 / 取消收起**（取代原生的归档按钮）、置顶；会话菜单另有“稍后处理（预设/自定义时间）”“此会话不自动收起”。
-- **时间策略**：Host 定时器精确唤醒 Snooze（浏览器关闭也有效，Host 停机后补算）；默认 7 天无活动自动收起，可关闭或修改天数，首次安装给予完整宽限。
-- **设置页**：在 **插件 → 本插件详情页** 中设置自动收起并查看最近的状态变更；视图选项菜单的“侧栏设置…”直达。
+- **时间策略**：Host 定时器精确唤醒 Snooze（浏览器关闭也有效，Host 停机后补算）；默认 7 天无活动自动收起，可关闭或修改天数，首次安装给予完整宽限。每个工作区可跟随默认、自定义天数或关闭；规则变严时只给受影响的会话重新计宽限。
+- **结果确认**：可选“保留失败的会话”“保留每个新结果”，直到在会话菜单中“确认此结果”（各窗口共享，区别于个人已读）。
+- **设置页**：在 **插件 → 本插件详情页** 中设置自动收起与工作区覆盖，实时预览草稿的效果（即将收起、下一期限、跳过原因、被保留的结果并可全部确认），查看最近的状态变更；被其他插件遮蔽时说明原因。视图选项菜单的“侧栏设置…”直达。
+- **快捷键**：原生“搜索会话”（⌘K）与“添加工作区”（⌘O）作用于本侧栏。
 - **搜索与筛选**：与原生一致，标题/工作区即时匹配并同时搜索正文（`sessions.search`，显示截断提示）；隐藏 / 显示 / 仅显示已归档。
 - **中英文、亮暗主题**跟随 Harness。
 
@@ -60,4 +64,4 @@ tests/          domain / host / client 单元测试；e2e 脚本与脚本化模�
 scripts/        构建（Loader lazy-CJS 封装与签名守卫）、pack 检查
 ```
 
-端到端测试的完整步骤见 [M0 验证记录 · 复现](docs/validation/poc/README.md#复现)。
+端到端测试的完整步骤见 [M0 验证记录 · 复现](docs/validation/poc/README.md#复现)；审批态、快捷键、策略与规模测量的步骤见 [2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。

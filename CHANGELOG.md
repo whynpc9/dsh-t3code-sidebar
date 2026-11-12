@@ -16,11 +16,13 @@ All versions are internal alphas (R0); nothing has been published to npm. The ve
 
 - **⌘K / ⌘O (session search / add workspace) did nothing while this sidebar was active.** The native commands only raise requests for the browser that owns the slot. The sidebar now consumes the same request store from the native registration (through the public `ctx.slots.entries`) and opens search or the add-workspace dialog.
 - The settings page no longer discards an edit made before its first effect ran.
+- **Settle was never offered on sessions without a plugin record** (every session on a fresh install until it got a record). With a ready Host that reports activity, a session without a view counts as having no background work. The Host now publishes sessions whose activity it could not read, so those stay unknown.
+- **The one list rendered every session.** At 5000 sessions, switching into the one list cost p95 895 ms on Linux Web. It now renders a 200-row window that grows on scroll and always includes the current session (view switch p95 34 ms).
 
 ### Changed
 
 - `TimePolicy` gains `keepUnacknowledgedResults` and `workspaceOverrides`, and `TaskRecord` gains `resultAcknowledgedSeq`. Both default when read from older storage, so no migration is needed. Command actions gain `acknowledge-result`. Protocol stays at version 1, because both halves ship in one package.
-- Test count: 137 → 197 (DOM component tests for search races and keyboard navigation added).
+- Test count: 137 → 202 (DOM component tests for search races, keyboard navigation and the one-list window added).
 
 ## 0.1.0-alpha.1 — 2026-11-12 (#6)
 
