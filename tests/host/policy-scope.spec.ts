@@ -170,6 +170,35 @@ describe('workspace policy overrides (P01)', () => {
     expect(settled()).toEqual(['s2'])
   })
 
+  it('does not delay cold sessions under an unchanged workspace rule when the Host default changes', async () => {
+    const { sweep, settled, setPolicy, global } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 2 } } })
+    global().workspaceEligibleSince['wa'] = 1 // wa's own grace has run out
+    // Shortening the Host default starts a grace for its followers (s2) only.
+    await setPolicy({ autoSettleAfterDays: 3, workspaceOverrides: { wa: { mode: 'custom', days: 2 } } })
+    await sweep()
+    expect(settled()).toEqual(['s1'])
+  })
+
+  it('judges the membership snapshot whose grace it persisted, not a later registry read', async () => {
+    const { host, storage, sweep, settled, setPolicy } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    // s2 joining another workspace makes the next sweep write membership; while
+    // that write is in flight, s1 leaves the "off" workspace.
+    host.registry.workspaces.push({ id: 'wb', sessionIds: ['s2'] })
+    let release!: () => void
+    storage.globalGate = new Promise<void>((resolve) => { release = resolve })
+    const pass = sweep()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    host.registry.workspaces.splice(0, 1)
+    storage.globalGate = null
+    release()
+    await pass
+    expect(settled()).toEqual(['s2'])
+  })
+
   it('settles nothing under workspace overrides while membership cannot be read', async () => {
     const { host, sweep, settled, setPolicy, service } = await boot()
     await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })

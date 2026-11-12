@@ -448,7 +448,9 @@ export class T3SidebarService extends TypertRemoteService {
   private recordOf(sessionId: string, now: number): TaskRecord {
     const stored = this.domain?.table('tasks').get(sessionId)
     if (stored !== undefined) return stored
-    const since = this.requireDomain().global.get().policyEligibleSince
+    // Scope-independent baseline: the Host, workspace and membership graces are
+    // applied by `withGrace` for the rule that actually governs the session.
+    const since = this.requireDomain().global.get().installedAt
     return emptyRecord(sessionId, since > 0 ? since : now)
   }
 
@@ -746,9 +748,9 @@ export class T3SidebarService extends TypertRemoteService {
    * scope change never settles a long-idle session at once (spec §2). New
    * sessions need none: their anchor is their creation time.
    */
-  private async trackMemberships(): Promise<void> {
+  private async trackMemberships(): Promise<ReadonlyMap<string, string> | null> {
     const map = this.memberships(0)
-    if (map === null) return
+    if (map === null) return null
     const domain = this.requireDomain()
     const global = domain.global.get()
     const now = Date.now()
@@ -781,12 +783,14 @@ export class T3SidebarService extends TypertRemoteService {
     }
     if (Object.keys(previous).length !== Object.keys(membership).length) changed = true
     if (Object.keys(sessionEligibleSince).length !== Object.keys(global.sessionEligibleSince).length) changed = true
-    if (!changed) { this.membershipUnsaved = false; return }
+    if (!changed) { this.membershipUnsaved = false; return map }
     // Until this grace is durable, a session that changed rule must not be
     // judged under its new rule without it: the scope counts as unknown (the
     // next sweep sees the same change and retries the write).
     this.membershipUnsaved = !await domain.global.set({ ...domain.global.get(), membership, sessionEligibleSince })
       .then(() => true, () => false)
+    // The snapshot whose grace is now durable; a later registry read may already differ.
+    return this.membershipUnsaved ? null : map
   }
 
   /** Workspace membership, or null when unknown (unreadable registry, or a membership grace not yet persisted). */
@@ -1124,7 +1128,7 @@ export class T3SidebarService extends TypertRemoteService {
       await this.refreshOutstandingActivity()
       // 3. Automatic settle: time pre-filter first, then fresh activity facts for due candidates.
       //    Membership is read first so a scope change grants its grace before any decision.
-      await this.trackMemberships()
+      const tracked = await this.trackMemberships()
       const policy = domain.global.get().policy
       const anyEnabled = policy.autoSettleAfterDays !== null
         || Object.values(policy.workspaceOverrides).some(override => override.mode === 'custom')
@@ -1132,7 +1136,8 @@ export class T3SidebarService extends TypertRemoteService {
       const graced = domain.global.get()
       // Unknown membership with workspace overrides makes every rule unknown
       // (decideAutoSettle skips `scope-unknown`); it never falls back to the Host default.
-      const membership = this.knownMemberships(0)
+      // Exactly the membership whose grace was just persisted (or verified unchanged).
+      const membership = tracked
       const scopeKnown = membership !== null
       const keepResults = policy.keepUnacknowledgedFailures || policy.keepUnacknowledgedResults
       const due: { record: TaskRecord; header: HostSessionHeader; workspaceId: string | null }[] = []
