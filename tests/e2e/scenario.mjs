@@ -154,6 +154,17 @@ try {
     const home = await focusedKey()
     record('N09.arrow-key-navigation', start !== down && down?.startsWith('session:') === true && end !== home && home === start, JSON.stringify({ start, down, end, home }))
 
+    // N10: keyboard focus on a workspace header reveals its actions and Tab reaches them.
+    await viewOption(page, 'Workspace')
+    await page.locator('[data-workspace]:not([data-workspace=""]) .t3sb-group-row').first().focus()
+    await page.keyboard.press('Tab')
+    const tabbed = await page.evaluate(() => {
+      const el = document.activeElement
+      return el?.tagName === 'BUTTON' && el.closest('.t3sb-group-row') !== null ? el.getAttribute('aria-label') : null
+    })
+    record('N10.group-actions-keyboard', tabbed !== null, tabbed ?? 'focus left the header')
+    await viewOption(page, 'Status')
+
     // N05: Archive lives in the row's "…" menu (the native session menu).
     const doneRow = rowIn(page, done)
     await doneRow.hover()

@@ -731,7 +731,9 @@
 
 @media (hover: hover) {
   .t3sb-group-row:hover .t3sb-row-actions,
-  .t3sb-search-row:hover .t3sb-row-actions {
+  .t3sb-search-row:hover .t3sb-row-actions,
+  html[data-input-modality='keyboard'] .t3sb-group-row:focus-within .t3sb-row-actions,
+  html[data-input-modality='keyboard'] .t3sb-search-row:focus-within .t3sb-row-actions {
     display: inline-flex;
   }
 }

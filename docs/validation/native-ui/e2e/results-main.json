@@ -1,6 +1,6 @@
 {
   "phase": "main",
-  "at": "2026-11-12T09:22:50.851Z",
+  "at": "2026-11-12T09:27:54.053Z",
   "results": [
     {
       "id": "N01.default-grouping-status",
@@ -47,7 +47,12 @@
     {
       "id": "N09.arrow-key-navigation",
       "pass": true,
-      "detail": "{\"start\":\"group:status:active\",\"down\":\"session:session-78922c9a-2d9d-4f46-ae00-0da0a8e9121c\",\"end\":\"session:session-686da936-288d-40a2-8dbf-59c77eaae533\",\"home\":\"group:status:active\"}"
+      "detail": "{\"start\":\"group:status:active\",\"down\":\"session:session-90f43e05-8d3a-4138-a146-3e39f1a82e41\",\"end\":\"session:session-c4956c46-ffd8-438e-bcbc-07232c7e9f06\",\"home\":\"group:status:active\"}"
+    },
+    {
+      "id": "N10.group-actions-keyboard",
+      "pass": true,
+      "detail": "Workspace actions for alpha"
     },
     {
       "id": "N05.archive-in-more-menu",
