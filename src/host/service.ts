@@ -22,10 +22,10 @@ import {
 import { NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
-  acknowledgeResult, autoSettle, foldActivity, mergeHistory, reconcile, reopen, setPolicyOverride, settle, snooze,
+  acknowledgeResult, autoSettle, foldActivity, mergeHistory, reconcile, releaseHeldAutoSettle, reopen, setPolicyOverride, settle, snooze,
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
-import { effectivePolicy, graceSince, isStricter, stricterWorkspaces } from '../domain/policy.ts'
+import { effectivePolicy, graceSince, heldResult, isStricter, stricterWorkspaces } from '../domain/policy.ts'
 import {
   DAY_MS, DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, MAX_AUTO_SETTLE_DAYS, emptyRecord, known, unknown,
   type ActivitySummary, type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
@@ -697,6 +697,14 @@ export class T3SidebarService extends TypertRemoteService {
    * process started (every event was folded live). A fold that could not be
    * persisted makes it unknown again.
    */
+  /** Whether an active keep protection, under the session's effective rule, holds its latest result. */
+  private holdsResult(record: TaskRecord): boolean {
+    const policy = this.requireDomain().global.get().policy
+    if (record.policyOverride === 'disabled') return false
+    if (effectivePolicy(policy, this.memberships()?.get(record.sessionId) ?? null).days === null) return false
+    return heldResult(policy, record.activity, record.resultAcknowledgedSeq) !== null
+  }
+
   private resultHistoryKnown(sessionId: string): boolean {
     if (this.failedFolds.has(sessionId) || this.historyInvalid.has(sessionId)) return false
     if (this.historyFolded.has(sessionId)) return true
@@ -1079,6 +1087,9 @@ export class T3SidebarService extends TypertRemoteService {
       if (event.type === 'turn/end') this.refreshActivitySoon(sessionId)
       const facts = this.factsOf(record, this.cachedActivity(record), null)
       record = reconcile(record, facts, this.nativeOf(sessionId), now) ?? record
+      // A result that ended a turn still running when a sweep settled the
+      // session (no check before the commit can close that window).
+      if (event.type === 'turn/end') record = releaseHeldAutoSettle(record, candidate => this.holdsResult(candidate)) ?? record
       try {
         await this.commit(record, before, `activity:${event.type}`, null)
       } catch {

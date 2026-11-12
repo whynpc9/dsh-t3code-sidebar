@@ -462,6 +462,42 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(s1.autoSettleSkip).toBe('unacknowledged-result')
   })
 
+  it('reopens an automatic settle when the turn it overlapped ends with a held result', async () => {
+    const { service, sweep, settled, setPolicy, emit, rebuild } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/start', 3, {}, old)
+    await settleTick()
+    await setPolicy({ keepUnacknowledgedResults: true })
+    await rebuild('s1', 's2')
+    // The sweep settles s1 (its turn looked idle), then that turn's end is folded.
+    await sweep()
+    expect(settled()).toEqual(['s1', 's2'])
+    emit('s1', 'turn/end', 4, { reason: { kind: 'completed' } }, Date.now())
+    await settleTick()
+    expect(settled()).toEqual(['s2'])
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.autoSettleSkip).toBe('unacknowledged-result')
+  })
+
+  it('leaves automatic settles alone without a keep protection, and never undoes a manual settle', async () => {
+    const { service, sweep, settled, emit, rebuild, setPolicy } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/start', 3, {}, old)
+    await settleTick()
+    await rebuild('s1', 's2')
+    await sweep()
+    emit('s1', 'turn/end', 4, { reason: { kind: 'completed' } }, Date.now())
+    await settleTick()
+    expect(settled()).toEqual(['s1', 's2'])
+    // Manual settle under a keep protection: a later fold of an ending turn does not reopen it.
+    await setPolicy({ keepUnacknowledgedResults: true })
+    const revision = service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')!.record.revision
+    await service.command({ protocolVersion: 1, commandId: 'cmd-reopen-s2', sessionId: 's2', expectedRevision: revision, observedPending: [], action: { kind: 'reopen' } })
+    await service.command({ protocolVersion: 1, commandId: 'cmd-settle-s2', sessionId: 's2', expectedRevision: revision + 1, observedPending: [], action: { kind: 'settle' } })
+    emit('s2', 'turn/end', 9, { reason: { kind: 'completed' } }, Date.now())
+    await settleTick()
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')?.record.disposition).toMatchObject({ kind: 'settled', reason: 'manual' })
+  })
+
   it('keeps a failed live fold unknown after catch-up clears it, until a replay succeeds', async () => {
     const { service, storage, emit, rebuild } = await boot()
     // A session created by this process would be known by its creation time…

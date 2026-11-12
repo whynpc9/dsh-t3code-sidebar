@@ -176,6 +176,22 @@ export function foldActivity(summary: ActivitySummary, event: FoldableEvent): Ac
 }
 
 /**
+ * Undo an automatic settle that a just-folded result says was premature: the
+ * turn was still ending while the sweep judged the session (any later turn
+ * start reopens a settled task anyway), and an active keep protection holds
+ * that result until it is acknowledged. Manual settles are never undone here.
+ * Returns null when nothing changes.
+ */
+export function releaseHeldAutoSettle(
+  record: TaskRecord,
+  held: (record: TaskRecord) => boolean,
+): TaskRecord | null {
+  const disposition = record.disposition
+  if (disposition.kind !== 'settled' || disposition.reason !== 'idle-timeout') return null
+  return held(record) ? { ...record, disposition: { kind: 'normal' } } : null
+}
+
+/**
  * Merge a session's replayed history into its record. A parking (Snooze or
  * Settle) accepted while the summary still missed older events keeps its
  * meaning: replayed events that predate the parking advance its baselines, so
