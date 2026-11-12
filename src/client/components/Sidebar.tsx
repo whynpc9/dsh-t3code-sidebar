@@ -410,7 +410,9 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     body = nodes
     if (shown.hiddenCount > 0) {
       rowKeys.push('flat:more')
-      nodes.push(<GrowSentinel key={`flat:more:${shown.rows.length}`} onReach={() => { setFlatLimit(limit => limit + FLAT_WINDOW) }} />)
+      // Grow from what is rendered (the window may already reach past the limit to the current session).
+      const rendered = shown.rows.length
+      nodes.push(<GrowSentinel key={`flat:more:${rendered}`} onReach={() => { setFlatLimit(limit => Math.max(limit, rendered) + FLAT_WINDOW) }} />)
     }
   }
   if (empty) rowKeys.unshift('empty')

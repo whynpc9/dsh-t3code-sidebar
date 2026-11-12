@@ -238,6 +238,32 @@ describe('one-list window (Q02)', () => {
     }
   })
 
+  it('grows past a window that already reaches a current session beyond the first page', () => {
+    const observers: { callback: IntersectionObserverCallback }[] = []
+    const original = globalThis.IntersectionObserver
+    globalThis.IntersectionObserver = class {
+      constructor(readonly callback: IntersectionObserverCallback) { observers.push(this) }
+      observe() {}
+      disconnect() { observers.splice(observers.indexOf(this), 1) }
+      unobserve() {}
+      takeRecords() { return [] }
+    } as unknown as typeof IntersectionObserver
+    try {
+      const now = Date.now()
+      const sessions = Array.from({ length: 700 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000, ...(i === 450 ? { retainedBy: { mainView: 1 } } : {}) }))
+      const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
+      const view = render(runtime)
+      const rowCount = () => view.querySelectorAll('.t3sb-session-row').length
+      expect(rowCount()).toBe(451)
+      act(() => {
+        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
+      })
+      expect(rowCount()).toBe(651)
+    } finally {
+      globalThis.IntersectionObserver = original
+    }
+  })
+
   it('always renders the current session even beyond the first window', async () => {
     const { flatWindow } = await import('../../src/client/model.ts')
     const rows = Array.from({ length: 300 }, (_, i) => ({ current: i === 250 }) as never)

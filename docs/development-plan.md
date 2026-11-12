@@ -43,7 +43,7 @@
 | U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、Enter 打开有组件测试（A08）；⌘K/⌘O 失效已修复（消费原生注册注入的请求 store），Linux Web 实测通过，**Desktop 待复验**；读屏未验收 |
 | S01 设置与诊断 | 完成 | 设置在插件详情页：后端类型与回退原因、被其他插件遮蔽时点名胜出者（`ctx.slots.entries` 最低 priority）、审计记录 |
 | P01–P04 时间策略 | 完成（v0.1 范围） | Host 默认/Workspace 覆盖/会话豁免，分范围宽限；保留未确认结果/失败与共享“确认此结果”；`previewPolicy` 草稿预览；见[时间策略 Spec §0](time-policy-spec.md) |
-| Q01 | 进行中 | 217 项单元/服务/组件/集成测试；Linux Web 端到端：主场景 20、重启 1、新功能 14 |
+| Q01 | 进行中 | 218 项单元/服务/组件/集成测试；Linux Web 端到端：主场景 20、重启 1、新功能 14 |
 | Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
 | Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
 | R01 | 部分 | [CHANGELOG](../CHANGELOG.md)、[发行说明与支持矩阵](release.md)（门禁核对）已有；npm 包名可用性与正式发布未做 |
