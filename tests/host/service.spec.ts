@@ -166,7 +166,9 @@ describe('T3SidebarService', () => {
     const storage = new MemoryDomainFacility()
     await boot(storage, { s1: 'r1', s2: 'r1' })
     // Installed long ago, so the restarted window is distinguishable from it.
-    ;(storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number }).policyEligibleSince = 1
+    const installed = storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number; installedAt: number }
+    installed.policyEligibleSince = 1
+    installed.installedAt = 1
     const reenabledAt = Date.now()
     const second = await boot(storage, { s1: 'r2', s2: 'r1' })
     const tasks = second.service.getSnapshot(1).tasks
