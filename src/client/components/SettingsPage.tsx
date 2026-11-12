@@ -5,7 +5,7 @@
  * the automatic-settle policy with its workspace overrides and a live preview
  * of what it would do, and the recent state changes.
  */
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PolicyPreview } from '../../contracts/schema.ts'
 import { MAX_AUTO_SETTLE_DAYS, MIN_AUTO_SETTLE_DAYS, type TimePolicy, type WorkspacePolicyOverride } from '../../domain/types.ts'
@@ -95,8 +95,14 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
   const [acknowledging, setAcknowledging] = useState(false)
 
   // Follow policy changes made elsewhere (another window, a reconnect) while this page is open.
+  // Only on a change: re-applying on mount would discard an edit made before the effect ran.
   const policyKey = JSON.stringify(backend.policy)
-  useEffect(() => { setDraft(draftOf(backend.policy)) }, [policyKey])
+  const appliedPolicy = useRef(policyKey)
+  useEffect(() => {
+    if (appliedPolicy.current === policyKey) return
+    appliedPolicy.current = policyKey
+    setDraft(draftOf(backend.policy))
+  }, [policyKey])
 
   useEffect(() => {
     if (!host || view !== 'page') return

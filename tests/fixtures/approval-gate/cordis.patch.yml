@@ -1,0 +1,4 @@
+# Test fixture only: never install in a real profile.
+- insert:
+    - id: t3code-approval-gate-fixture
+      name: dsh-t3code-approval-gate-fixture

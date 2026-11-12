@@ -203,3 +203,45 @@ describe('native ⌘K / ⌘O requests', () => {
     expect(view.textContent).toContain('workspace.browse')
   })
 })
+
+describe('one-list window (Q02)', () => {
+  it('renders a bounded window that reaches the current session and grows when its end comes into view', () => {
+    const observers: { callback: IntersectionObserverCallback; targets: Element[] }[] = []
+    const original = globalThis.IntersectionObserver
+    globalThis.IntersectionObserver = class {
+      readonly targets: Element[] = []
+      constructor(readonly callback: IntersectionObserverCallback) { observers.push(this) }
+      observe(target: Element) { this.targets.push(target) }
+      disconnect() { observers.splice(observers.indexOf(this), 1) }
+      unobserve() {}
+      takeRecords() { return [] }
+    } as unknown as typeof IntersectionObserver
+    try {
+      const now = Date.now()
+      const sessions = Array.from({ length: 450 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000 }))
+      const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
+      const view = render(runtime)
+      const rowCount = () => view.querySelectorAll('.t3sb-session-row').length
+      expect(rowCount()).toBe(200)
+      expect(view.querySelector('[data-row-key="flat:more"]')).not.toBeNull()
+      act(() => {
+        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
+      })
+      expect(rowCount()).toBe(400)
+      act(() => {
+        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
+      })
+      expect(rowCount()).toBe(450)
+      expect(view.querySelector('[data-row-key="flat:more"]')).toBeNull()
+    } finally {
+      globalThis.IntersectionObserver = original
+    }
+  })
+
+  it('always renders the current session even beyond the first window', async () => {
+    const { flatWindow } = await import('../../src/client/model.ts')
+    const rows = Array.from({ length: 300 }, (_, i) => ({ current: i === 250 }) as never)
+    expect(flatWindow(rows, 200)).toMatchObject({ hiddenCount: 49 })
+    expect(flatWindow(rows, 200).rows).toHaveLength(251)
+  })
+})

@@ -22,7 +22,7 @@ import { SettingsPage } from './components/SettingsPage.tsx'
 import { TaskSidebar } from './components/Sidebar.tsx'
 import { en, NS, zh, type Key } from './locales.ts'
 import {
-  autoSettleApplies, buildRows, heldResultOf, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot,
+  autoSettleApplies, buildRows, heldResultOf, hostActivityKnown, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot,
 } from './model.ts'
 import { DEFAULT_PREFS, migratePrefs, type MenuTarget, type Prefs, type Runtime } from './runtime.ts'
 import { NO_REQUESTS, watchSlot, type ShortcutRequests, type SlotEntryLike, type SlotsLike, type SlotStatus } from './native-bridge.ts'
@@ -381,6 +381,7 @@ export function apply(rawCtx: Context): void {
         tasks: state.tasks,
         lastSeen: prefs.getSnapshot().lastSeen,
         now,
+        hostActivity: hostActivityKnown(state),
       })
       const row = rows.find(candidate => candidate.sessionId === sessionId)
       if (row === undefined || row.native.archived) return []

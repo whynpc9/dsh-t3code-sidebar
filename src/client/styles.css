@@ -381,6 +381,11 @@
   position: relative;
 }
 
+/* Marks the end of the rendered part of the one list (it grows on scroll). */
+.t3sb-grow-sentinel {
+  height: 1px;
+}
+
 .t3sb-group + .t3sb-group {
   margin-top: 4px;
 }

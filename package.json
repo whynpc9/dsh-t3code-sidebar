@@ -1,6 +1,6 @@
 {
   "name": "dsh-t3code-sidebar",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "T3 Code style task sidebar for DeepSeek Harness, composed like the native Workspaces browser: group sessions by status (Pinned / Active / Working / Snoozed / Settled), by workspace, or in one list.",
   "license": "MIT",
   "packageManager": "pnpm@11.20.0",
@@ -16,7 +16,8 @@
     "lib/client.js",
     "cordis.patch.yml",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"

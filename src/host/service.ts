@@ -214,7 +214,7 @@ export class T3SidebarService extends TypertRemoteService {
       await Promise.all(ids.slice(index, index + ACTIVITY_CONCURRENCY).map(async (sessionId) => {
         if (this.activityCache.has(sessionId)) return
         const activity = await this.queryActivity(sessionId)
-        if (activity.known && activity.value.length > 0) this.publish([this.viewOf(this.recordOf(sessionId, Date.now()))], null)
+        if (!activity.known || activity.value.length > 0) this.publish([this.viewOf(this.recordOf(sessionId, Date.now()))], null)
       }))
     }
   }
@@ -1088,7 +1088,8 @@ export class T3SidebarService extends TypertRemoteService {
   }
 
   /**
-   * Stored records plus unstored sessions with known background activity (an
+   * Stored records plus unstored sessions with background activity or an
+   * unreadable activity answer (an
    * unstored session is an implicit revision-0 record; commands against it
    * use expectedRevision 0).
    */
@@ -1099,7 +1100,9 @@ export class T3SidebarService extends TypertRemoteService {
     const now = Date.now()
     for (const [sessionId, cached] of this.activityCache) {
       if (stored.has(sessionId) || !this.headers.has(sessionId)) continue
-      if (cached.value.known && cached.value.value.length > 0) views.push(this.viewOf(this.recordOf(sessionId, now)))
+      // Sessions with background work, or whose activity could not be read: a
+      // Client treats a session without any view as having nothing running.
+      if (!cached.value.known || cached.value.value.length > 0) views.push(this.viewOf(this.recordOf(sessionId, now)))
     }
     return views
   }

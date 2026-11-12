@@ -16,7 +16,7 @@
 | 工期由 23–35 调整为 31–45 工作日（单人顺序执行） | M0 含冷读成本测量和自建构建封装；M2 含五分区+原生动作+停车对话框，原估偏紧；Desktop 验收单列为 M6 |
 | 记录 Q1–Q5 决策 | 允许浏览器本地降级预览；Linux Web 先行、Desktop 后置；能力不足时自动 Settled 默认 Off；包名 `dsh-t3code-sidebar`；单人开发 |
 
-## 执行状态（2026-11-09，11-11 更新）
+## 执行状态（2026-11-09，11-11、11-12 更新）
 
 **M0 决策：Go。** 四个验证门在 Linux Web 上通过（G0-C 部分通过，足以支持 v0.1 范围），详见 [M0 验证记录](validation/poc/README.md)。当前代码为 R0 内部 alpha `0.1.0-alpha.0`：单元/服务测试 38 项、端到端 12 项全部通过。
 
@@ -31,27 +31,29 @@
 | --- | --- | --- |
 | D01 纯领域函数 | 完成 | 分区、排序、Snooze 预设/DST、自动收起判定、命令转换；单元测试覆盖 T01–T05、T07、T09 |
 | B01 工程骨架 | 完成 | esbuild 双面构建、Loader 封装、签名守卫、pack 检查、MIT LICENSE |
-| B03 测试宿主 | 部分 | 隔离 `DSH_HOME` 安装流程、脚本化模型桩、Playwright 脚本已有；CI（`.github/workflows/verify.yml`：pnpm frozen install + verify）已加，e2e 未进 CI |
-| C01 契约冻结 v1 | 部分 | `src/contracts` 为单一来源（记录、策略、Remote、错误码、审计）；尚未回写实现 Spec 与时间策略 Spec |
+| B03 测试宿主 | 部分 | 隔离 `DSH_HOME` 安装流程、脚本化模型桩（新增 `#askbash`/`#delaybash`）、测试专用审批夹具 `tests/fixtures/approval-gate`、规模播种 `scale-seed.mjs`、Playwright 脚本；CI 跑 verify，e2e 仍需本机 Harness 运行时，未进 CI |
+| C01 契约冻结 v1 | 完成 | `src/contracts` 为单一来源；已回写[实现 Spec §4.0/§5.0](implementation-spec.md) 与[时间策略 Spec §0](time-policy-spec.md)；第 9 节待对齐项全部关闭 |
 | B02 / D03 Host 事实 | 完成（v1） | 活动 waterfall、事件折叠、Pin/Archive、会话头索引 |
 | D02 存储 | 完成（v1） | `t3_sidebar` 存储域（tasks / transitions / global），CAS、每记录收据、审计上限 1000 |
 | D04 同步 | 完成 | baseline + 连续 delta、多窗口一致；2026-11-11（#4）加订阅代次：reset/断档/epoch 变化立即重订阅，旧流与旧代次回复不写状态，非 ready 拒绝写入，回复丢失以原 commandId 恢复 |
 | D05 本地后端 | 完成 | localStorage + BroadcastChannel，自动回退并在设置中说明 |
 | U01–U04 任务视图与动作 | 完成（alpha） | 五分区、行状态、当前项定位、原生菜单内的 Snooze/已处理/重新打开、自定义时间对话框 |
-| U05 搜索与筛选 | 完成（alpha） | 项目筛选、标题即时过滤、正文搜索（防抖与迟到丢弃）；A07 竞态未做自动化 |
+| U05 搜索与筛选 | 完成 | 标题/工作区即时匹配、正文搜索（防抖、取消与迟到丢弃）；A07 竞态由真实 DOM 组件测试覆盖（`tests/client/sidebar.spec.tsx`） |
 | U06 项目视图 | 完成（alpha） | 分组、空项目、新建会话、添加/重命名/移除项目；目录选择用 `pickDirectory` 或路径输入 |
-| U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、菜单键、aria 标签、reduced-motion；Desktop 已复现启用 T3 后 ⌘K 和 ⌘O 失效，读屏与焦点保持未验收 |
-| S01 设置与诊断 | 部分 | 设置面板位于侧栏内（非 Harness 设置卡），显示后端类型与审计记录；插件未接管槽位时的独立诊断入口未做 |
-| P01–P04 时间策略 | 部分 | 全局策略、会话级禁用、调度器、到期补算、审计；Workspace 级覆盖与“确认结果”未做 |
-| Q01 | 进行中 | 137 项单元/服务/集成测试 + 12 项端到端 |
+| U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、Enter 打开有组件测试（A08）；⌘K/⌘O 失效已修复（消费原生注册注入的请求 store），Linux Web 实测通过，**Desktop 待复验**；读屏未验收 |
+| S01 设置与诊断 | 完成 | 设置在插件详情页：后端类型与回退原因、被其他插件遮蔽时点名胜出者（`ctx.slots.entries` 最低 priority）、审计记录 |
+| P01–P04 时间策略 | 完成（v0.1 范围） | Host 默认/Workspace 覆盖/会话豁免，分范围宽限；保留未确认结果/失败与共享“确认此结果”；`previewPolicy` 草稿预览；见[时间策略 Spec §0](time-policy-spec.md) |
+| Q01 | 进行中 | 199 项单元/服务/组件/集成测试；Linux Web 端到端：主场景 20、重启 1、新功能 14 |
 | Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
-| Q02 | 部分 | Desktop 已载入 100 工作区、5000 条合成会话，并观察到 50 条并发轮次与标题搜索命中。性能预算和反复启停仍待实测 |
-| R01 | 未开始 | 发行文档和发布门禁 |
+| Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
+| R01 | 部分 | [CHANGELOG](../CHANGELOG.md)、[发行说明与支持矩阵](release.md)（门禁核对）已有；npm 包名可用性与正式发布未做 |
 | M6 | 部分 | macOS Desktop 0.2.2-rc.1 已通过 #2/#3 的 ⌘Q 重启主线、标题与元数据对照、语义唤醒和到期补算。⌘K / ⌘O 回归已复现。 |
 
 issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交与恢复已有自动化证据。E 已修复 pnpm 11 的 frozen lockfile，统一包管理器并启用 CI。Linux Web 已复验真实 Loader 安装、重启与回退。D 已在 macOS Desktop 上复验扫描后新建并停放、十分钟内 ⌘Q 重启的场景。Desktop 其余通过范围和待验项见[验证记录](validation/poc/README.md)。
 
-下一步顺序：补审批态端到端与 A07/A08 自动化 → Workspace 级策略（P01）→ C01 回写 Spec → Q02 规模测试 → Q03 → v0.1-preview。
+2026-11-12（`0.1.0-alpha.2`）：审批态端到端、A07/A08 自动化、Workspace 级策略（P01）、结果确认与预览（P04）、S01 诊断、C01 回写、⌘K/⌘O 修复、Linux Web 规模测量均已完成，见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。
+
+下一步顺序：macOS Desktop 复验 alpha.2（⌘K/⌘O、Workspace 策略、规模预算与 20 次启停，M6）→ A10 guest/权限撤回 → 读屏验收 → v0.1-preview 发布决定。
 
 ## 1. 输入、交付物和工作方式
 
@@ -258,15 +260,15 @@ GUI 验证按本项目指示使用当前宿主支持的最新正式 Terra，显�
 
 | # | 问题 | 涉及文档 | 建议 |
 | --- | --- | --- | --- |
-| 1 | `TaskRecord` 缺少时间策略字段（`policyOverride`、`autoSettleHold`、`settledEnteredAt`、`lastSnoozeWakeAt`、`policyEligibleSince`、`effectivePolicyIdentity`、`eligibilityEpoch`、`resultAcknowledgedToken`、settled reason/anchor/deadline） | 实现 §4.1、时间 §2–3 | 合并为一个 v1 schema；settled 分支携带 reason 与审计字段 |
-| 2 | Remote 表只有 5 个任务方法；策略相关 6 个（getPolicy/setPolicy/previewPolicy/setSessionPolicyOverride/acknowledgeResult/listTransitions）仅出现在时间 Spec | 实现 §5、时间 §7 | 统一列入实现 Spec 的 API 表，并共享 CAS/receipt/错误码 |
-| 3 | 存储为单个 state 记录（≤16 MiB，receipts 4096 条）；时间 Spec 又加入策略、覆盖和 1000 条/90 天审计 | 实现 §5、时间 §7 | 估算 5000 会话下的体积；审计与 receipts 拆成独立表或环形记录 |
+| 1 | （已关闭，见实现 Spec §4.0）`TaskRecord` 缺少时间策略字段（`policyOverride`、`autoSettleHold`、`settledEnteredAt`、`lastSnoozeWakeAt`、`policyEligibleSince`、`effectivePolicyIdentity`、`eligibilityEpoch`、`resultAcknowledgedToken`、settled reason/anchor/deadline） | 实现 §4.1、时间 §2–3 | 合并为一个 v1 schema；settled 分支携带 reason 与审计字段 |
+| 2 | （已关闭，见实现 Spec §5.0）Remote 表只有 5 个任务方法；策略相关 6 个（getPolicy/setPolicy/previewPolicy/setSessionPolicyOverride/acknowledgeResult/listTransitions）仅出现在时间 Spec | 实现 §5、时间 §7 | 统一列入实现 Spec 的 API 表，并共享 CAS/receipt/错误码 |
+| 3 | （已关闭：拆为 tasks/transitions 表与 global，见实现 Spec §5.0）存储为单个 state 记录（≤16 MiB，receipts 4096 条）；时间 Spec 又加入策略、覆盖和 1000 条/90 天审计 | 实现 §5、时间 §7 | 估算 5000 会话下的体积；审计与 receipts 拆成独立表或环形记录 |
 | 4 | 自动 Settled 默认开启 7 天，而调研建议“锁定可读活动来源后再决定是否默认启用” | 时间 §1、调研 t3-time-policies | 已关闭：Host 活动来源已证实，保持默认 7 天开启（能力门控仍保留） |
-| 5 | Host 侧待交互权威来源未证实 | 实现 §4.2、调研 harness-state-contract | 已回答：审批/阻塞提问发生在 turn 内，由 `workspace/session-activity` 的 `turn` 间接可知；turn 结束后仍存在的定时提问仅 Client 可见，作为命令下界上报。待写回实现 Spec |
-| 6 | 策略设置面板与“独立插件诊断入口”未指定宿主位置 | 实现 §7、时间 §2 | G0-A 验证 settings card；由 S01 实现 |
+| 5 | Host 侧待交互权威来源未证实 | 实现 §4.2、调研 harness-state-contract | 已关闭：审批/阻塞提问发生在 turn 内，由 `workspace/session-activity` 的 `turn` 间接可知；turn 结束后仍存在的定时提问经 `sessionController.projections` 精确读取，Client 观察作为下界（实现 Spec §4.0 `PendingSignal`） |
+| 6 | 策略设置面板与“独立插件诊断入口”未指定宿主位置 | 实现 §7、时间 §2 | 已关闭：插件详情页（`plugins.bundle.config`）承载设置与诊断（S01） |
 | 7 | 平台目标为“Web Chromium + macOS Desktop，Linux Web 后续”，但开发机为 Linux | 实现 §9 | 已决定：Linux Web 为首个验证环境，macOS Desktop 在 M6 |
 | 8 | 原生 pin 集合是否承诺顺序未确认 | 产品 §4.5 | 已关闭：`WorkspaceSnapshot.pinnedSessionIds` 为“最近置顶在前” |
-| 9 | 多 Workspace membership 的 `policyWorkspaceId` 选择没有 UI 任务 | 时间 §2 | 归入 P01/P04 |
+| 9 | 多 Workspace membership 的 `policyWorkspaceId` 选择没有 UI 任务 | 时间 §2 | 已关闭：0.2.2-rc.1 中会话至多属于一个工作区（cwd 等于唯一规范路径），无需选择；见时间策略 Spec §0 |
 
 ## 10. 已确认决策（2026-11-09）
 
