@@ -22,6 +22,8 @@ export type AutoSettleSkip =
   | 'pending'
   | 'unacknowledged-failure'
   | 'unacknowledged-result'
+  | 'result-unknown'
+  | 'scope-unknown'
   | 'not-due'
 
 export interface AutoSettleDecision {
@@ -62,6 +64,11 @@ export function decideAutoSettle(input: {
   readonly policy: TimePolicy
   /** The session's workspace (selects a workspace override); null or omitted: none. */
   readonly workspaceId?: string | null
+  /**
+   * False when workspace membership could not be read: with overrides in the
+   * policy the effective rule is then unknown, and an unknown rule never settles.
+   */
+  readonly scopeKnown?: boolean
   readonly record: TaskRecord
   readonly facts: TaskFacts
   readonly native: NativeState
@@ -76,6 +83,7 @@ export function decideAutoSettle(input: {
   const skip = (reason: AutoSettleSkip): AutoSettleDecision =>
     ({ eligible: false, skip: reason, anchorAt, deadline, days, source: effective.source })
 
+  if (input.scopeKnown === false && Object.keys(policy.workspaceOverrides).length > 0) return skip('scope-unknown')
   if (days === null || deadline === null) return skip(effective.source === 'workspace' ? 'workspace-off' : 'policy-off')
   if (record.policyOverride === 'disabled') return skip('session-disabled')
   if (record.autoSettleHold !== null) return skip('reopen-hold')
@@ -90,6 +98,11 @@ export function decideAutoSettle(input: {
   if (facts.pending.value.length > 0) return skip('pending')
   const held = heldResult(policy, facts.summary, record.resultAcknowledgedSeq)
   if (held !== null) return skip(held)
+  // A keep protection can only be judged against the latest result; one that
+  // may be missing from the summary (not replayed yet) is never assumed absent.
+  if ((policy.keepUnacknowledgedFailures || policy.keepUnacknowledgedResults) && facts.resultHistoryKnown === false) {
+    return skip('result-unknown')
+  }
   if (!(now > deadline)) return skip('not-due')
   return { eligible: true, skip: null, anchorAt, deadline, days, source: effective.source }
 }

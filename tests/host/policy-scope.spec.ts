@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { T3SidebarService } from '../../src/host/service.ts'
 import type { CommandInput, PolicyPreview } from '../../src/contracts/schema.ts'
-import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
+import { appendStored, createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
 
 const DAY = 24 * 3_600_000
 let hosts: FakeHost[] = []
@@ -56,7 +56,13 @@ async function boot(setup?: (host: FakeHost) => void) {
     keepUnacknowledgedFailures: false,
     ...patch,
   })
-  return { host, service, storage, global, sweep, settled, view, emit, setPolicy }
+  /** Replay the stored logs of the given sessions into their summaries (what a sweep starts in the background). */
+  const rebuild = async (...ids: string[]) => {
+    const internal = service as unknown as { rebuildHistory(ids: string[]): void; historyRebuild: Promise<void> | undefined }
+    internal.rebuildHistory(ids)
+    await internal.historyRebuild
+  }
+  return { host, service, storage, global, sweep, settled, view, emit, setPolicy, rebuild }
 }
 
 const command = (patch: Partial<CommandInput> & Pick<CommandInput, 'action'>): CommandInput => ({
@@ -130,6 +136,16 @@ describe('workspace policy overrides (P01)', () => {
     expect(settled()).toEqual(['s1', 's2'])
   })
 
+  it('settles nothing under workspace overrides while membership cannot be read', async () => {
+    const { host, sweep, settled, setPolicy, service } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })
+    host.registry.list = () => { throw new Error('registry unavailable') }
+    ;(service as unknown as { membershipCache: unknown }).membershipCache = undefined
+    await sweep()
+    expect(settled()).toEqual([])
+    expect(service.previewPolicy({ protocolVersion: 1, draft: null }).skips).toEqual({ 'scope-unknown': 2 })
+  })
+
   it('validates override values on the Host', async () => {
     const { setPolicy } = await boot()
     expect(await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 0 } } })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
@@ -139,12 +155,13 @@ describe('workspace policy overrides (P01)', () => {
 
 describe('result acknowledgement (P04)', () => {
   it('keeps an unacknowledged result under keepUnacknowledgedResults until it is acknowledged', async () => {
-    const { service, sweep, settled, setPolicy, emit, global } = await boot()
+    const { service, sweep, settled, setPolicy, emit, global, rebuild } = await boot()
     const old = Date.now() - 20 * DAY
     emit('s1', 'turn/start', 3, {}, old)
     emit('s1', 'turn/end', 4, { reason: { kind: 'completed' } }, old)
     await settleTick()
     await setPolicy({ keepUnacknowledgedResults: true })
+    await rebuild('s1', 's2')
     await sweep()
     expect(settled()).toEqual(['s2'])
     const held = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!
@@ -163,16 +180,46 @@ describe('result acknowledgement (P04)', () => {
   })
 
   it('treats blocked, max-tokens, interrupted and unknown endings as failures', async () => {
-    const { service, sweep, setPolicy, emit } = await boot()
+    const { service, sweep, setPolicy, emit, rebuild } = await boot()
     const old = Date.now() - 20 * DAY
     emit('s1', 'turn/end', 4, { reason: { kind: 'max-tokens' } }, old)
     emit('s2', 'turn/end', 4, { reason: { kind: 'aborted' } }, old)
     await settleTick()
     await setPolicy({ keepUnacknowledgedFailures: true })
+    await rebuild('s1', 's2')
     await sweep()
     const tasks = service.getSnapshot(1).tasks
     expect(tasks.find(task => task.sessionId === 's1')).toMatchObject({ record: { disposition: { kind: 'normal' } }, autoSettleSkip: 'unacknowledged-failure' })
     expect(tasks.find(task => task.sessionId === 's2')).toMatchObject({ record: { disposition: { kind: 'settled' } } })
+  })
+
+  it('rebuilds a result written before this process started before a keep protection can pass', async () => {
+    const { service, host, sweep, settled, setPolicy } = await boot()
+    // s1's failure is only in its stored log (it ended while the Host half was not running).
+    appendStored(host, 's1', 'turn/start', {}, Date.now() - 20 * DAY)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'error' } }, Date.now() - 20 * DAY)
+    await setPolicy({ keepUnacknowledgedFailures: true })
+    await sweep()
+    // Neither session is settled while its latest result is not known; both rebuilds start.
+    expect(settled()).toEqual([])
+    expect(service.previewPolicy({ protocolVersion: 1, draft: null }).skips).toMatchObject({ 'result-unknown': 2 })
+    await (service as unknown as { historyRebuild: Promise<void> | undefined }).historyRebuild
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    const s1 = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!
+    expect(s1.record.activity.lastTurnEnd).toMatchObject({ seq: 1, reason: 'error' })
+    expect(s1.autoSettleSkip).toBe('unacknowledged-failure')
+    expect(service.previewPolicy({ protocolVersion: 1, draft: null }).held).toEqual([{ sessionId: 's1', turnEndSeq: 1, reason: 'unacknowledged-failure' }])
+  })
+
+  it('keeps a session unsettled while its stored log cannot be read', async () => {
+    const { host, sweep, settled, setPolicy, service } = await boot()
+    host.replayFail = true
+    await setPolicy({ keepUnacknowledgedResults: true })
+    await sweep()
+    await (service as unknown as { historyRebuild: Promise<void> | undefined }).historyRebuild
+    await sweep()
+    expect(settled()).toEqual([])
   })
 
   it('starts a fresh grace window when a keep protection is released', async () => {
@@ -199,10 +246,11 @@ describe('result acknowledgement (P04)', () => {
 
 describe('previewPolicy', () => {
   it('counts due sessions, skip reasons and held results without writing', async () => {
-    const { service, emit, storage } = await boot()
+    const { service, emit, storage, rebuild } = await boot()
     const old = Date.now() - 20 * DAY
     emit('s1', 'turn/end', 4, { reason: { kind: 'error' } }, old)
     await settleTick()
+    await rebuild('s1', 's2')
     const before = JSON.stringify(storage.data.get('t3_sidebar')!.global)
     const current = service.previewPolicy({ protocolVersion: 1, draft: null })
     expect(current).toMatchObject<Partial<PolicyPreview>>({ policyRevision: 0, sessions: 2, due: 2, heldTotal: 0 })

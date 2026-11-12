@@ -18,7 +18,9 @@ const PREVIEW_DEBOUNCE_MS = 300
 const SKIP_ORDER = [
   'pinned', 'parked', 'session-disabled', 'workspace-off', 'reopen-hold', 'running', 'active-work', 'pending', 'unknown',
 ] as const
-const UNKNOWN_SKIPS = new Set(['running-unknown', 'activity-unknown', 'pending-unknown', 'unknown'])
+const UNKNOWN_SKIPS = new Set(['running-unknown', 'activity-unknown', 'pending-unknown', 'result-unknown', 'scope-unknown', 'unknown'])
+/** Upper bound on preview pages "Acknowledge all" walks through (200 held results each). */
+const ACK_MAX_ROUNDS = 50
 
 function reasonKey(reason: string): Key {
   if (reason === 'snooze-expired' || reason === 'idle-timeout') return `reason.${reason}`
@@ -144,16 +146,26 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
     const key = `error.${result.code}` as Key
     setMessage(t(key) === key ? t('error.generic', { code: result.code }) : t(key))
   }
+  // The preview lists at most 200 held results per answer: acknowledge page by
+  // page, re-reading the preview, until none is held or a page makes no progress.
   const acknowledgeAll = async () => {
-    if (preview === null) return
+    if (preview === null || pendingKey === null) return
     setAcknowledging(true)
-    let failed = 0
-    for (const item of preview.held) {
-      const result = await runtime.command(item.sessionId, { kind: 'acknowledge-result', turnEndSeq: item.turnEndSeq })
-      if (!result.ok) failed += 1
+    const draftNow = JSON.parse(pendingKey) as PolicyDraft
+    let current: PolicyPreview | null = preview
+    for (let round = 0; current !== null && current.held.length > 0 && round < ACK_MAX_ROUNDS; round += 1) {
+      let progressed = false
+      for (const item of current.held) {
+        const result = await runtime.command(item.sessionId, { kind: 'acknowledge-result', turnEndSeq: item.turnEndSeq })
+        if (result.ok) progressed = true
+      }
+      current = await runtime.previewPolicy(draftNow)
+      if (!progressed) break
     }
     setAcknowledging(false)
-    setMessage(failed === 0 ? t('settings.preview.acknowledged') : t('settings.preview.ackFailed', { n: failed }))
+    const remaining = current === null ? null : current.heldTotal
+    if (current !== null) setPreview(current)
+    setMessage(remaining === 0 ? t('settings.preview.acknowledged') : t('settings.preview.ackFailed', { n: remaining ?? preview.heldTotal }))
     setPreviewTick(value => value + 1)
   }
   const titleOf = (id: string) => runtime.sessions.getSnapshot().byId[id]?.displayTitle ?? id.slice(0, 8)

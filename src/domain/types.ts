@@ -75,6 +75,13 @@ export interface TaskFacts {
   readonly pending: Known<readonly PendingSignal[]>
   readonly activity: Known<readonly string[]>
   readonly summary: ActivitySummary
+  /**
+   * Whether `summary` is known to include the session's latest result. False
+   * when results may predate installation or have been written while the
+   * Host half was not running and the stored log has not been replayed yet.
+   * Omitted: known.
+   */
+  readonly resultHistoryKnown?: boolean
 }
 
 /** Native Harness state; the plugin never stores pin/archive itself. */

@@ -150,6 +150,14 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly expiryRetry = new Map<string, { readonly failures: number; readonly at: number }>()
   /** Sessions whose event fold could not be persisted; catch-up recovers them. */
   private readonly failedFolds = new Set<string>()
+  /** When this service started: sessions created since then had every event observed live. */
+  private readonly startedAt = Date.now()
+  /** Sessions whose stored log was replayed into the summary by this process (latest result known). */
+  private readonly historyFolded = new Set<string>()
+  /** History rebuilds waiting or running, and failed ones with their retry instant. */
+  private readonly historyQueue = new Set<string>()
+  private readonly historyRetry = new Map<string, { readonly failures: number; readonly at: number }>()
+  private historyRebuild: Promise<void> | undefined
   /**
    * Parked sessions whose change token moved without observed events: the
    * token to acknowledge once a replay verified them, and the retry backoff.
@@ -291,14 +299,18 @@ export class T3SidebarService extends TypertRemoteService {
     let due = 0
     let sessions = 0
     let nextDeadline: PolicyPreview['nextDeadline'] = null
+    const membership = this.memberships()
     for (const header of this.headers.values()) {
       sessions += 1
-      const workspaceId = this.workspaceOf(header.id)
+      const workspaceId = membership?.get(header.id) ?? null
       const raw = this.recordOf(header.id, now)
       const record = this.withGrace(raw, global, workspaceId)
       const decision = decideAutoSettle({
-        policy, workspaceId, record,
-        facts: this.factsOf(record, this.cachedActivity(record), null, this.pendingCache.get(record.sessionId) ?? known([])),
+        policy, workspaceId, scopeKnown: membership !== null, record,
+        facts: {
+          ...this.factsOf(record, this.cachedActivity(record), null, this.pendingCache.get(record.sessionId) ?? known([])),
+          resultHistoryKnown: this.resultHistoryKnown(header.id),
+        },
         native: this.nativeOf(record.sessionId),
         createdAt: header.createdAt,
         now,
@@ -598,14 +610,19 @@ export class T3SidebarService extends TypertRemoteService {
     let autoSettleDeadline: number | null = null
     let autoSettleSkip: string | null = null
     if (header !== undefined) {
-      const workspaceId = this.workspaceOf(record.sessionId)
+      const membership = this.memberships()
+      const workspaceId = membership?.get(record.sessionId) ?? null
       const decision = decideAutoSettle({
         policy: global.policy,
         workspaceId,
+        scopeKnown: membership !== null,
         record: this.withGrace(record, global, workspaceId),
         // Display only: a session whose durable state was not read yet shows its
         // time-based status; the sweep reads exact pending state before acting.
-        facts: this.factsOf(record, activity, null, this.pendingCache.get(record.sessionId) ?? known([])),
+        facts: {
+          ...this.factsOf(record, activity, null, this.pendingCache.get(record.sessionId) ?? known([])),
+          resultHistoryKnown: this.resultHistoryKnown(record.sessionId),
+        },
         native: this.nativeOf(record.sessionId),
         createdAt: header.createdAt,
         now: Date.now(),
@@ -654,8 +671,60 @@ export class T3SidebarService extends TypertRemoteService {
     return map
   }
 
-  private workspaceOf(sessionId: string, maxAgeMs?: number): string | null {
-    return this.memberships(maxAgeMs)?.get(sessionId) ?? null
+  /**
+   * Whether the session's summary is known to hold its latest result: its
+   * stored log was replayed by this process, or it was created after this
+   * process started (every event was folded live). A fold that could not be
+   * persisted makes it unknown again.
+   */
+  private resultHistoryKnown(sessionId: string): boolean {
+    if (this.failedFolds.has(sessionId)) return false
+    if (this.historyFolded.has(sessionId)) return true
+    const header = this.headers.get(sessionId)
+    return header !== undefined && header.createdAt >= this.startedAt
+  }
+
+  /**
+   * Replay stored logs read-only into the summaries of the given sessions, in
+   * the background with bounded concurrency; the fold is committed through the
+   * serial queue. A failed read backs off and is retried by a later sweep.
+   */
+  private rebuildHistory(sessionIds: readonly string[]): void {
+    const now = Date.now()
+    for (const sessionId of sessionIds) {
+      const retry = this.historyRetry.get(sessionId)
+      if (retry === undefined || now >= retry.at) this.historyQueue.add(sessionId)
+    }
+    this.historyRebuild ??= (async () => {
+      while (this.historyQueue.size > 0 && !this.disposed) {
+        const batch = [...this.historyQueue].slice(0, ACTIVITY_CONCURRENCY)
+        await Promise.all(batch.map(async (sessionId) => {
+          await this.rebuildOne(sessionId)
+          this.historyQueue.delete(sessionId)
+        }))
+      }
+    })().catch(() => undefined).finally(() => { this.historyRebuild = undefined })
+  }
+
+  private async rebuildOne(sessionId: string): Promise<void> {
+    const events = await this.replayFoldable(sessionId)
+    if (this.disposed) return
+    const committed = events !== null && await this.queue.run(async () => {
+      const before = this.recordOf(sessionId, Date.now())
+      let activity = before.activity
+      for (const event of events) activity = foldActivity(activity, event)
+      if (activity !== before.activity) {
+        await this.commit({ ...before, activity, revision: before.revision + 1 }, before, 'history-rebuilt', null)
+      }
+      return true
+    }).catch(() => false)
+    if (committed) {
+      this.historyFolded.add(sessionId)
+      this.historyRetry.delete(sessionId)
+    } else {
+      const failures = (this.historyRetry.get(sessionId)?.failures ?? 0) + 1
+      this.historyRetry.set(sessionId, { failures, at: Date.now() + unknownRetryDelay(failures) })
+    }
   }
 
   /**
@@ -1028,29 +1097,46 @@ export class T3SidebarService extends TypertRemoteService {
         || Object.values(policy.workspaceOverrides).some(override => override.mode === 'custom')
       if (!anyEnabled) return
       const graced = domain.global.get()
+      // Unknown membership with workspace overrides makes every rule unknown
+      // (decideAutoSettle skips `scope-unknown`); it never falls back to the Host default.
+      const membership = this.memberships(0)
+      const scopeKnown = membership !== null
+      const keepResults = policy.keepUnacknowledgedFailures || policy.keepUnacknowledgedResults
       const due: { record: TaskRecord; header: HostSessionHeader; workspaceId: string | null }[] = []
+      const needHistory: string[] = []
       for (const header of this.headers.values()) {
-        const workspaceId = this.workspaceOf(header.id)
+        const workspaceId = membership?.get(header.id) ?? null
         const record = this.withGrace(this.recordOf(header.id, now), graced, workspaceId)
         if (record.disposition.kind !== 'normal') continue
         const timeOnly = decideAutoSettle({
           policy,
           workspaceId,
+          scopeKnown,
           record,
           facts: { running: known(false), activity: known([]), pending: known([]), summary: record.activity },
           native: { pinned: false, archived: false },
           createdAt: header.createdAt,
           now,
         })
-        if (timeOnly.eligible) due.push({ record, header, workspaceId })
+        if (!timeOnly.eligible) continue
+        // A keep protection needs the latest result; one that may predate this
+        // process is rebuilt from the stored log first (off this queue), and the
+        // session waits for a later sweep.
+        if (keepResults && !this.resultHistoryKnown(header.id)) { needHistory.push(header.id); continue }
+        due.push({ record, header, workspaceId })
       }
+      if (needHistory.length > 0) this.rebuildHistory(needHistory)
       for (let index = 0; index < due.length; index += ACTIVITY_CONCURRENCY) {
         const batch = due.slice(index, index + ACTIVITY_CONCURRENCY)
         await Promise.all(batch.map(async ({ record, header, workspaceId }) => {
           const activity = await this.queryActivity(record.sessionId)
           const facts = this.factsOf(record, activity, null, await this.queryDurablePending(record.sessionId))
           const native = this.nativeOf(record.sessionId)
-          const decision = decideAutoSettle({ policy, workspaceId, record, facts, native, createdAt: header.createdAt, now: Date.now() })
+          const decision = decideAutoSettle({
+            policy, workspaceId, scopeKnown, record,
+            facts: { ...facts, resultHistoryKnown: this.resultHistoryKnown(record.sessionId) },
+            native, createdAt: header.createdAt, now: Date.now(),
+          })
           if (!decision.eligible || decision.deadline === null) return
           const stored = this.recordOf(record.sessionId, now)
           const settled = autoSettle(stored, facts, Date.now(), {

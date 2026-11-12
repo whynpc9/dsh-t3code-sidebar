@@ -81,9 +81,10 @@ describe('SettingsPage', () => {
 
   it('previews the draft and acknowledges held results in bulk', async () => {
     const command = vi.fn(async () => ({ ok: true as const, task: null as never, dataRevision: 1, replayed: false }))
+    const cleared: PolicyPreview = { ...preview, held: [], heldTotal: 0 }
     const runtime = fakeRuntime({
       sessions: [session('s1'), session('s2')], workspaces, backend: { policy },
-      overrides: { previewPolicy: vi.fn(async () => preview), command },
+      overrides: { previewPolicy: vi.fn(async () => (command.mock.calls.length > 0 ? cleared : preview)), command },
     })
     const view = render(runtime)
     await wait(350)
@@ -97,6 +98,42 @@ describe('SettingsPage', () => {
     await act(async () => { ackAll.click() })
     expect(command).toHaveBeenCalledWith('s1', { kind: 'acknowledge-result', turnEndSeq: 4 })
     expect(view.textContent).toContain('settings.preview.acknowledged')
+  })
+
+  it('acknowledges every page of held results, not only the first 200', async () => {
+    const page = (from: number, count: number) => Array.from({ length: count }, (_, i) => ({ sessionId: `s${from + i}`, turnEndSeq: 1, reason: 'unacknowledged-result' as const }))
+    const pages: PolicyPreview[] = [
+      { ...preview, held: page(0, 200), heldTotal: 250 },
+      { ...preview, held: page(200, 50), heldTotal: 50 },
+      { ...preview, held: [], heldTotal: 0 },
+    ]
+    let served = 0
+    const command = vi.fn(async () => ({ ok: true as const, task: null as never, dataRevision: 1, replayed: false }))
+    const runtime = fakeRuntime({
+      sessions: [session('s1')], workspaces, backend: { policy },
+      overrides: { previewPolicy: vi.fn(async () => pages[Math.min(served++, pages.length - 1)]!), command },
+    })
+    const view = render(runtime)
+    await wait(350)
+    served = 1 // the page shown is the first one; the next read serves the second
+    const ackAll = [...view.querySelectorAll('button')].find(button => button.textContent === 'settings.preview.ackAll')!
+    await act(async () => { ackAll.click() })
+    expect(command).toHaveBeenCalledTimes(250)
+    expect(view.textContent).toContain('settings.preview.acknowledged')
+  })
+
+  it('reports what is still held when acknowledging makes no progress', async () => {
+    const command = vi.fn(async () => ({ ok: false as const, code: 'CONFLICT' as const, message: 'x', task: null }))
+    const runtime = fakeRuntime({
+      sessions: [session('s1')], workspaces, backend: { policy },
+      overrides: { previewPolicy: vi.fn(async () => preview), command },
+    })
+    const view = render(runtime)
+    await wait(350)
+    const ackAll = [...view.querySelectorAll('button')].find(button => button.textContent === 'settings.preview.ackAll')!
+    await act(async () => { ackAll.click() })
+    expect(command).toHaveBeenCalledTimes(1)
+    expect(view.textContent).toContain('settings.preview.ackFailed(n=1)')
   })
 
   it('says which plugin shadows the sidebar', async () => {

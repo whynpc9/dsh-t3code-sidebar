@@ -95,6 +95,17 @@ describe('decideAutoSettle with scopes and acknowledgement', () => {
     expect(decide({ workspaceId: 'short', policy: { ...policy, autoSettleAfterDays: null } })).toMatchObject({ eligible: true })
   })
 
+  it('never settles under an unknown rule or an unknown latest result', () => {
+    expect(decide({ workspaceId: null, scopeKnown: false })).toMatchObject({ eligible: false, skip: 'scope-unknown' })
+    // Without overrides the rule is the Host default whatever the membership.
+    expect(decide({ policy: { ...policy, workspaceOverrides: {} }, scopeKnown: false }).eligible).toBe(true)
+    const keep = { ...policy, keepUnacknowledgedFailures: true }
+    expect(decide({ policy: keep, facts: facts({}), record: record({ policyEligibleSince: T0 }) }).eligible).toBe(true)
+    expect(decide({ policy: keep, facts: { ...facts({}), resultHistoryKnown: false } })).toMatchObject({ skip: 'result-unknown' })
+    // With no keep protection the latest result does not matter.
+    expect(decide({ facts: { ...facts({}), resultHistoryKnown: false } }).eligible).toBe(true)
+  })
+
   it('T09: an acknowledged result no longer holds the session', () => {
     const keep = { ...policy, keepUnacknowledgedResults: true }
     const summary = ended(4, 'completed')
