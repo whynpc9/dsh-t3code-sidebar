@@ -43,7 +43,10 @@ interface Env {
   apis: FakeRemote[]
   mounts: number
   unmounts: number
+  /** `sidebar.workspaces` registrations. */
   slots: Set<{ inject: () => { runtime: Runtime } }>
+  /** Other slot registrations (the settings page under Plugins). */
+  pages: Set<{ name: string; key?: string }>
   menus: Set<unknown>
   locales: number
   status: ReturnType<typeof counted<Map<string, { running?: boolean }>>>
@@ -59,7 +62,7 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
   const root = new Context()
   const env = {
     root, nextApi, apis: [] as FakeRemote[], mounts: 0, unmounts: 0,
-    slots: new Set(), menus: new Set(), locales: 0,
+    slots: new Set(), pages: new Set(), menus: new Set(), locales: 0,
     status: counted(new Map<string, { running?: boolean }>()),
     sessions: counted({ byId: {}, items: [] }),
     workspaces: counted({ items: [], pinnedSessionIds: [], archivedSessionIds: [] }),
@@ -75,9 +78,10 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
         return () => { dispose?.() }
       })
     }
-    register(options: { inject: () => { runtime: Runtime } }) {
-      env.slots.add(options)
-      return () => { env.slots.delete(options) }
+    register(options: { name: string; key?: string; inject: () => { runtime: Runtime } }) {
+      const ledger: Set<unknown> = options.name === 'sidebar.workspaces' ? env.slots : env.pages
+      ledger.add(options)
+      return () => { ledger.delete(options) }
     }
   }
   root.plugin(Slots)
@@ -159,6 +163,7 @@ function footprint(env: Env) {
   return {
     mounted: env.mounts - env.unmounts,
     slots: env.slots.size,
+    pages: env.pages.size,
     menus: env.menus.size,
     locales: env.locales,
     status: env.status.live,
@@ -168,7 +173,7 @@ function footprint(env: Env) {
   }
 }
 
-const EMPTY = { mounted: 0, slots: 0, menus: 0, locales: 0, status: 0, sessions: 0, workspaces: 0, openStreams: 0 }
+const EMPTY = { mounted: 0, slots: 0, pages: 0, menus: 0, locales: 0, status: 0, sessions: 0, workspaces: 0, openStreams: 0 }
 
 afterEach(async () => {
   vi.useRealTimers()
@@ -190,7 +195,8 @@ describe('client lifecycle on a real Cordis context', () => {
       await fiber
       await settle()
       expect(backendOf(env)).toMatchObject({ kind: 'host', status: 'ready' })
-      expect(footprint(env)).toMatchObject({ mounted: 1, slots: 1, menus: 1, locales: 1, openStreams: 1 })
+      expect(footprint(env)).toMatchObject({ mounted: 1, slots: 1, pages: 1, menus: 1, locales: 1, openStreams: 1 })
+      expect([...env.pages]).toEqual([expect.objectContaining({ name: 'plugins.bundle.config', key: 'dsh-t3code-sidebar' })])
       await fiber.dispose()
       await settle()
       expect(footprint(env)).toEqual(EMPTY)
