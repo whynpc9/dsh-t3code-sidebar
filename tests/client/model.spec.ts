@@ -54,12 +54,15 @@ describe('rows', () => {
     expect(rows.find(row => row.sessionId === 'cur')?.blank).toBe(true)
   })
 
-  it('keeps the stored title apart from the id fallback of an untitled session', () => {
+  it('treats a session without a stored title as Untitled, whatever the host falls back to', () => {
     const base = inputs()
-    const untitled = session('u1', { title: '', displayTitle: 'u1' })
-    const rows = buildRows({ ...base, sessions: { ...base.sessions, ids: [...base.sessions.ids, 'u1'], byId: { ...base.sessions.byId, u1: untitled } } })
-    expect(rows.find(row => row.sessionId === 'u1')).toMatchObject({ untitled: true, title: 'u1', storedTitle: '' })
+    const byId = { ...base.sessions.byId, u1: session('u1', { title: '', displayTitle: 'u1' }), u2: session('u2', { title: undefined, displayTitle: 'project-dir', cwd: '/p/project-dir' }) }
+    const rows = buildRows({ ...base, sessions: { ...base.sessions, ids: [...base.sessions.ids, 'u1', 'u2'], byId } })
+    expect(rows.find(row => row.sessionId === 'u1')).toMatchObject({ untitled: true, storedTitle: '' })
+    expect(rows.find(row => row.sessionId === 'u2')).toMatchObject({ untitled: true, storedTitle: '' })
     expect(rows.find(row => row.sessionId === 'a')).toMatchObject({ untitled: false, storedTitle: 'Title a' })
+    // Search does not match the directory-name fallback, like the native search.
+    expect(searchResults(rows, 'project-dir', [], 'default', 50).items).toEqual([])
   })
 })
 

@@ -71,9 +71,10 @@ function statusOf(row: Row, t: Translate): { state: StateDotState; label: string
   return state === 'idle' ? null : { state, label: t(`status.${row.status}` as Key) }
 }
 
-export function displayTitle(row: Pick<Row, 'blank' | 'untitled' | 'title'>, t: Translate): string {
+/** Row label, as in the native list: New session, the stored title, or the localized Untitled. */
+export function displayTitle(row: Pick<Row, 'blank' | 'storedTitle'>, t: Translate): string {
   if (row.blank) return t('session.new')
-  return row.untitled || row.title === '' ? t('session.untitled') : row.title
+  return row.storedTitle === '' ? t('session.untitled') : row.storedTitle
 }
 
 function timeLabel(at: number, now: number, t: Translate): string {
@@ -283,7 +284,7 @@ export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showP
     event.preventDefault()
     env.open(row)
   }
-  // The menu's rename seeds from this field, so it carries the stored title (empty when untitled), never the id fallback.
+  // The menu's rename seeds from this field: the stored title the row shows, empty for an Untitled row (never the host's id or directory fallback).
   const target = row.blank ? undefined : { kind: 'session' as const, value: { sessionId: row.sessionId, displayTitle: row.storedTitle } }
   const triggerProps = env.menu?.getTriggerProps(target, { onKeyDown: openKey })
     ?? {
@@ -352,7 +353,7 @@ export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showP
       openDelayMs={800}
       grouped
       disabled={menuOpen}
-      copyText={row.blank || row.untitled || row.title === '' ? undefined : row.title}
+      copyText={row.blank || row.storedTitle === '' ? undefined : row.storedTitle}
       copyLabel={t('hover.copy')}
       copiedLabel={t('hover.copied')}
     />

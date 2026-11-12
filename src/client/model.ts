@@ -62,8 +62,9 @@ export interface Row {
   readonly sessionId: string
   /** Host display title (falls back to the session id when the session has no title). */
   readonly title: string
-  /** The session's own stored title, or empty: what rename and copy act on. */
+  /** The session's own stored title, or empty: what the row shows, and what rename, copy and search act on. */
   readonly storedTitle: string
+  /** No stored title: the row shows the localized "Untitled", as the native list does. */
   readonly untitled: boolean
   /** The provisional blank session (shown as "New session"). */
   readonly blank: boolean
@@ -136,7 +137,7 @@ export function buildRows(inputs: ModelInputs): Row[] {
     }
     const native: NativeState = { pinned: pinned.has(id), archived: archived.has(id) }
     const workspace = owner.get(id)
-    const untitled = (session.title ?? '').trim() === '' && session.displayTitle === id
+    const untitled = (session.title ?? '').trim() === ''
     rows.push({
       sessionId: id,
       title: session.displayTitle,
@@ -370,7 +371,8 @@ export function searchResults(
     seen.add(row.sessionId)
     ordered.push(row)
   }
-  const local = eligible.filter(row => row.title.toLowerCase().includes(q)
+  // As in the native search, an unnamed session does not match by the host's directory-name fallback.
+  const local = eligible.filter(row => row.storedTitle.toLowerCase().includes(q)
     || (row.workspaceTitle ?? '').toLowerCase().includes(q)
     || row.sessionId.toLowerCase().includes(q)).sort(byRecency)
   for (const row of local) include(row)
