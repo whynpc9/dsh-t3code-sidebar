@@ -253,7 +253,7 @@ function MoreButton({ row, env, title, menuOpen }: { row: Row; env: RowEnv; titl
         onClick={(event) => {
           event.stopPropagation()
           const rect = event.currentTarget.getBoundingClientRect()
-          env.runtime.toggleSessionMenu(row.sessionId, row.title, { x: rect.left, y: rect.bottom })
+          env.runtime.toggleSessionMenu(row.sessionId, row.storedTitle, { x: rect.left, y: rect.bottom })
         }}>
         <IconEllipsisOutlineRegular size={14} />
       </button>
@@ -283,14 +283,15 @@ export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showP
     event.preventDefault()
     env.open(row)
   }
-  const target = row.blank ? undefined : { kind: 'session' as const, value: { sessionId: row.sessionId, displayTitle: row.title } }
+  // The menu's rename seeds from this field, so it carries the stored title (empty when untitled), never the id fallback.
+  const target = row.blank ? undefined : { kind: 'session' as const, value: { sessionId: row.sessionId, displayTitle: row.storedTitle } }
   const triggerProps = env.menu?.getTriggerProps(target, { onKeyDown: openKey })
     ?? {
       onKeyDown: openKey,
       onContextMenu: (event: MouseEvent<HTMLElement>) => {
         if (target === undefined) return
         event.preventDefault()
-        env.runtime.openSessionMenu(row.sessionId, row.title, { x: event.clientX, y: event.clientY })
+        env.runtime.openSessionMenu(row.sessionId, row.storedTitle, { x: event.clientX, y: event.clientY })
       },
     }
   const own = (
@@ -351,7 +352,7 @@ export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showP
       openDelayMs={800}
       grouped
       disabled={menuOpen}
-      copyText={row.blank || row.title === '' ? undefined : row.title}
+      copyText={row.blank || row.untitled || row.title === '' ? undefined : row.title}
       copyLabel={t('hover.copy')}
       copiedLabel={t('hover.copied')}
     />

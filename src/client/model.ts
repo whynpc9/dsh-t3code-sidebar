@@ -60,7 +60,10 @@ export type StatusSnapshot = ReadonlyMap<string, SessionStatusEntry>
 
 export interface Row {
   readonly sessionId: string
+  /** Host display title (falls back to the session id when the session has no title). */
   readonly title: string
+  /** The session's own stored title, or empty: what rename and copy act on. */
+  readonly storedTitle: string
   readonly untitled: boolean
   /** The provisional blank session (shown as "New session"). */
   readonly blank: boolean
@@ -137,6 +140,7 @@ export function buildRows(inputs: ModelInputs): Row[] {
     rows.push({
       sessionId: id,
       title: session.displayTitle,
+      storedTitle: (session.title ?? '').trim(),
       untitled,
       blank: session.blank,
       updatedAt: session.updatedAt,
