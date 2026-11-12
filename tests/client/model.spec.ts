@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildRows, flatRows, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, flatRows, nextFocusIndex, placeOf, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ModelInputs, type Row, type SessionRow,
 } from '../../src/client/model.ts'
 import { migratePrefs, DEFAULT_PREFS } from '../../src/client/runtime.ts'
@@ -61,8 +61,17 @@ describe('rows', () => {
     expect(rows.find(row => row.sessionId === 'u1')).toMatchObject({ untitled: true, storedTitle: '' })
     expect(rows.find(row => row.sessionId === 'u2')).toMatchObject({ untitled: true, storedTitle: '' })
     expect(rows.find(row => row.sessionId === 'a')).toMatchObject({ untitled: false, storedTitle: 'Title a' })
-    // Search does not match the directory-name fallback, like the native search.
-    expect(searchResults(rows, 'project-dir', [], 'default', 50).items).toEqual([])
+    // The directory name is a place, not a title: it matches as the session's place, like the native search.
+    expect(searchResults(rows, 'project-dir', [], 'default', 50).items.map(result => [result.row.sessionId, result.place]))
+      .toEqual([['u2', 'project-dir']])
+  })
+
+  it('labels a search result with its workspace, else its directory name, else nothing (Ungrouped)', () => {
+    expect(placeOf({ workspaceTitle: 'One', cwd: '/p/one/sub' })).toBe('One')
+    expect(placeOf({ workspaceTitle: null, cwd: '/home/me/proj/' })).toBe('proj')
+    expect(placeOf({ workspaceTitle: null, cwd: 'C:\\work\\site' })).toBe('site')
+    expect(placeOf({ workspaceTitle: null, cwd: '/' })).toBe('/')
+    expect(placeOf({ workspaceTitle: null, cwd: null })).toBe('')
   })
 })
 

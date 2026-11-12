@@ -476,7 +476,7 @@ export function WorkspaceHoverContent({ title, path, createdAt, t }: { title: st
 
 // ── Search result ────────────────────────────────────────────────────────────
 
-export function SearchResultRow({ row, snippet, env }: { row: Row; snippet: string | null; env: RowEnv }) {
+export function SearchResultRow({ row, snippet, place, env }: { row: Row; snippet: string | null; place: string; env: RowEnv }) {
   const { t } = env
   const archived = row.native.archived
   const status = statusOf(row, t)
@@ -510,7 +510,7 @@ export function SearchResultRow({ row, snippet, env }: { row: Row; snippet: stri
         )}
       </span>
       <span className="t3sb-search-meta">
-        <span className="t3sb-search-workspace">{row.workspaceTitle ?? t('group.ungrouped')}</span>
+        <span className="t3sb-search-workspace">{place === '' ? t('group.ungrouped') : place}</span>
         {snippet !== null && <span className="t3sb-search-snippet">{snippet}</span>}
       </span>
     </div>

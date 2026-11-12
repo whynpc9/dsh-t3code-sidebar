@@ -342,6 +342,20 @@ export interface ContentHit {
 export interface SearchResult {
   readonly row: Row
   readonly snippet: string | null
+  /** Where the session lives: its workspace title, else its directory's name; empty means Ungrouped. */
+  readonly place: string
+}
+
+/**
+ * A session's place as the native search labels it: the owning workspace's
+ * title, else the basename of its working directory (the raw path when it
+ * has none), else empty for Ungrouped.
+ */
+export function placeOf(row: Pick<Row, 'workspaceTitle' | 'cwd'>): string {
+  if (row.workspaceTitle !== null) return row.workspaceTitle
+  if (row.cwd === null || row.cwd === '') return ''
+  const base = row.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+  return base !== '' ? base : row.cwd
 }
 
 export interface SearchResultSet {
@@ -373,12 +387,12 @@ export function searchResults(
   }
   // As in the native search, an unnamed session does not match by the host's directory-name fallback.
   const local = eligible.filter(row => row.storedTitle.toLowerCase().includes(q)
-    || (row.workspaceTitle ?? '').toLowerCase().includes(q)
+    || placeOf(row).toLowerCase().includes(q)
     || row.sessionId.toLowerCase().includes(q)).sort(byRecency)
   for (const row of local) include(row)
   for (const hit of content) include(byId.get(hit.sessionId))
   return {
-    items: ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null })),
+    items: ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null, place: placeOf(row) })),
     truncated: ordered.length > limit,
   }
 }

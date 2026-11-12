@@ -376,7 +376,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         <div className="t3sb-list">
           <div className="t3sb-search-tree" role="tree" aria-label={t('search.results')}>
             {results.map(result => (
-              <SearchResultRow key={result.row.sessionId} row={result.row} snippet={result.snippet}
+              <SearchResultRow key={result.row.sessionId} row={result.row} snippet={result.snippet} place={result.place}
                 env={{ ...env, open: (row) => { if (!row.native.archived) clearSearch(); open(row) } }} />
             ))}
           </div>
