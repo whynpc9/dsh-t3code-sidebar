@@ -503,6 +503,24 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.autoSettleSkip).toBe('unacknowledged-result')
   })
 
+  it('folds results from before a parking when a parked session is verified, so its history is really known', async () => {
+    const { service, host } = await boot()
+    const old = Date.now() - 20 * DAY
+    appendStored(host, 's1', 'turn/start', {}, old)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'error' } }, old + 1000)
+    // Snoozed from the cold (empty) summary; then the log token changes and the parking is verified.
+    const snoozed = await service.command({ protocolVersion: 1, commandId: 'cmd-snooze-cold', sessionId: 's1', expectedRevision: 0, observedPending: [], action: { kind: 'snooze', until: Date.now() + 3_600_000 } })
+    expect(snoozed).toMatchObject({ ok: true })
+    const internal = service as unknown as { unverified: Map<string, unknown>; verifyDue(): Promise<void>; resultHistoryKnown(id: string): boolean }
+    internal.unverified.set('s1', { token: 'changed', failures: 0, at: 0 })
+    await internal.verifyDue()
+    const task = service.getSnapshot(1).tasks.find(entry => entry.sessionId === 's1')!
+    // The old failure is in the summary but did not wake the Snooze (it predates it).
+    expect(task.record.disposition).toMatchObject({ kind: 'snoozed', baselineTurnEndSeq: 1 })
+    expect(task.record.activity.lastTurnEnd).toMatchObject({ seq: 1, reason: 'error' })
+    expect(internal.resultHistoryKnown.call(service, 's1')).toBe(true)
+  })
+
   it('leaves automatic settles alone without a keep protection, and never undoes a manual settle', async () => {
     const { service, sweep, settled, emit, rebuild, setPolicy } = await boot()
     const old = Date.now() - 20 * DAY

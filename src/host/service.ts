@@ -997,12 +997,16 @@ export class T3SidebarService extends TypertRemoteService {
       // the stored summary cannot hide it either; the record then keeps the
       // merge of both.
       const native = this.nativeOf(sessionId)
+      // They still belong in the summary (a keep protection judges the latest
+      // result): fold them with the parking baselines advanced over them, so
+      // they can never wake the task, and only judge what came after the park.
+      const base = mergeHistory(before, (events ?? []).filter(event => event.time < since))
       const wakeAt = (summary: TaskRecord['activity']): TaskRecord | null => reconcile(
-        { ...before, activity: summary },
-        { running: unknown, activity: this.cachedActivity({ ...before, activity: summary }), pending, summary },
+        { ...base, activity: summary },
+        { running: unknown, activity: this.cachedActivity({ ...base, activity: summary }), pending, summary },
         native, now,
       )
-      let activity = before.activity
+      let activity = base.activity
       let history: ActivitySummary = EMPTY_ACTIVITY
       let woken = wakeAt(activity)
       for (const event of events ?? []) {
@@ -1013,7 +1017,7 @@ export class T3SidebarService extends TypertRemoteService {
         history = folded
         woken ??= wakeAt(history)
       }
-      const replayed: TaskRecord = { ...before, activity }
+      const replayed: TaskRecord = { ...base, activity }
       const expired = before.disposition.kind === 'snoozed' && now >= before.disposition.until
       if (woken !== null) {
         // The wake is decided by the first waking prefix; the summary keeps everything replayed.
@@ -1025,7 +1029,7 @@ export class T3SidebarService extends TypertRemoteService {
         // exact pending read: either missing cannot rule a wake out.
         verified = events !== null && pending.known
         folded = verified
-        if (verified && activity !== before.activity) {
+        if (verified && (activity !== before.activity || base !== before)) {
           let merged: TaskRecord = { ...replayed, revision: before.revision + 1 }
           // A newer result recovered here (e.g. a turn end whose live fold failed)
           // releases an automatic settle it overlapped, as the live fold would have.
