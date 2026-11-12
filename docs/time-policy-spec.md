@@ -15,7 +15,7 @@
 | `effectivePolicyIdentity` / `eligibilityEpoch` | 以规则身份字符串替代 | `effectivePolicy().identity`（如 `host:7`、`workspace:<id>:off`）；身份变化即视为作用域变化 |
 | 保留未确认结果/失败（§3） | 已实现 | `keepUnacknowledgedResults`、`keepUnacknowledgedFailures`；异常结果 = completed/aborted 以外的结束原因（error、blocked、max-tokens、interrupted、未知） |
 | 保留选项下的历史结果 | 已实现 | 开启任一保留选项时，结果可能早于本进程（安装前、Host 半边未运行期间）的超期候选，先在后台只读重放其存储日志，补齐最新结果后再判定；补齐前或日志不可读时跳过（`result-unknown`），不会假定没有结果，也不以摘要中可能已过时的结果判定；某次事件折叠写入失败后，在重放成功前一直视为未知 |
-| 成员关系不可读 | 已实现 | 存在 Workspace 覆盖而注册表读取失败时，生效规则未知，跳过（`scope-unknown`），不回落到 Host 默认 |
+| 成员关系不可读 | 已实现 | 存在 Workspace 覆盖而注册表读取失败，或成员变化带来的宽限尚未持久化时，生效规则未知，跳过（`scope-unknown`），不回落到 Host 默认；下一次 sweep 重试写入 |
 | `acknowledgeResult(token)` | 已实现为命令 | `command` 的 `acknowledge-result{turnEndSeq}`，写 `TaskRecord.resultAcknowledgedSeq`（单调，只能确认已折叠的结果）；与浏览器个人已读分离；行菜单“确认此结果”，设置预览“全部确认” |
 | `previewPolicy`（§7） | 已实现 | 不写入；可预览未保存草稿（含保存后将启动的宽限）：一分钟内到期数、下一期限、跳过原因、被保留的结果 |
 | “应用于已存在的超期会话”的显式追溯 | 未实现 | 预览只展示；变严一律给宽限 |

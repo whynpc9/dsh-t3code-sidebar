@@ -136,6 +136,24 @@ describe('workspace policy overrides (P01)', () => {
     expect(settled()).toEqual(['s1', 's2'])
   })
 
+  it('does not settle a session under its new rule until the membership grace is durable', async () => {
+    const { host, storage, sweep, settled, setPolicy, global } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    // s1 leaves the "off" workspace, but the grace write fails.
+    host.registry.workspaces.splice(0)
+    storage.failGlobalWrites = true
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    // The write recovers: the grace is persisted and s1 still waits for it.
+    storage.failGlobalWrites = false
+    const movedAt = Date.now()
+    await sweep()
+    expect(global().sessionEligibleSince['s1']).toBeGreaterThanOrEqual(movedAt)
+    expect(settled()).toEqual(['s2'])
+  })
+
   it('settles nothing under workspace overrides while membership cannot be read', async () => {
     const { host, sweep, settled, setPolicy, service } = await boot()
     await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })

@@ -178,6 +178,8 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
   /** Session → workspace id, read from the workspace registry (null: registry without a listing). */
   private membershipCache: { readonly at: number; readonly map: ReadonlyMap<string, string> | null } | undefined
+  /** The last membership change could not be persisted (its grace is not durable yet). */
+  private membershipUnsaved = false
   private timer: ReturnType<typeof setTimeout> | undefined
   /** Fixed instant of the next fallback sweep; commits never push it later. */
   private fallbackSweepAt = Date.now() + SWEEP_MS
@@ -307,7 +309,7 @@ export class T3SidebarService extends TypertRemoteService {
     let due = 0
     let sessions = 0
     let nextDeadline: PolicyPreview['nextDeadline'] = null
-    const membership = this.memberships()
+    const membership = this.knownMemberships()
     for (const header of this.headers.values()) {
       sessions += 1
       const workspaceId = membership?.get(header.id) ?? null
@@ -618,7 +620,7 @@ export class T3SidebarService extends TypertRemoteService {
     let autoSettleDeadline: number | null = null
     let autoSettleSkip: string | null = null
     if (header !== undefined) {
-      const membership = this.memberships()
+      const membership = this.knownMemberships()
       const workspaceId = membership?.get(record.sessionId) ?? null
       const decision = decideAutoSettle({
         policy: global.policy,
@@ -771,8 +773,17 @@ export class T3SidebarService extends TypertRemoteService {
     }
     if (Object.keys(previous).length !== Object.keys(membership).length) changed = true
     if (Object.keys(sessionEligibleSince).length !== Object.keys(global.sessionEligibleSince).length) changed = true
-    if (!changed) return
-    await domain.global.set({ ...domain.global.get(), membership, sessionEligibleSince }).catch(() => undefined)
+    if (!changed) { this.membershipUnsaved = false; return }
+    // Until this grace is durable, a session that changed rule must not be
+    // judged under its new rule without it: the scope counts as unknown (the
+    // next sweep sees the same change and retries the write).
+    this.membershipUnsaved = !await domain.global.set({ ...domain.global.get(), membership, sessionEligibleSince })
+      .then(() => true, () => false)
+  }
+
+  /** Workspace membership, or null when unknown (unreadable registry, or a membership grace not yet persisted). */
+  private knownMemberships(maxAgeMs?: number): ReadonlyMap<string, string> | null {
+    return this.membershipUnsaved ? null : this.memberships(maxAgeMs)
   }
 
   private async refreshHeaders(): Promise<void> {
@@ -1113,7 +1124,7 @@ export class T3SidebarService extends TypertRemoteService {
       const graced = domain.global.get()
       // Unknown membership with workspace overrides makes every rule unknown
       // (decideAutoSettle skips `scope-unknown`); it never falls back to the Host default.
-      const membership = this.memberships(0)
+      const membership = this.knownMemberships(0)
       const scopeKnown = membership !== null
       const keepResults = policy.keepUnacknowledgedFailures || policy.keepUnacknowledgedResults
       const due: { record: TaskRecord; header: HostSessionHeader; workspaceId: string | null }[] = []
