@@ -113,3 +113,40 @@ describe('decideAutoSettle with scopes and acknowledgement', () => {
     expect(decide({ policy: keep, facts: facts({ summary }), record: record({ policyEligibleSince: T0, activity: summary, resultAcknowledgedSeq: 4 }) }).eligible).toBe(true)
   })
 })
+
+describe('mergeHistory', () => {
+  const human = (time: number, seq: number) => ({ type: 'user/message' as const, seq, time, human: true })
+  const start = (time: number, seq: number) => ({ type: 'turn/start' as const, seq, time })
+  const end = (time: number, seq: number, reason = 'error') => ({ type: 'turn/end' as const, seq, time, reason })
+
+  it('keeps a Settle accepted before the replay: history before it does not reopen, later activity does', async () => {
+    const { settle } = await import('../../src/domain/commands.ts')
+    const { reopenReason } = await import('../../src/domain/placement.ts')
+    const { mergeHistory } = await import('../../src/domain/commands.ts')
+    const settled = settle(record(), facts(), native, T0 + 100)
+    if (!settled.ok) throw new Error('settle refused')
+    const merged = mergeHistory(settled.record, [human(T0 + 10, 1), start(T0 + 11, 2), end(T0 + 20, 3, 'completed')])
+    expect(merged.activity.lastUserInputAt).toBe(T0 + 10)
+    expect(merged.disposition.kind === 'settled' && reopenReason(merged.disposition, facts({ summary: merged.activity }))).toBe(null)
+    const later = mergeHistory(settled.record, [human(T0 + 10, 1), human(T0 + 200, 4)])
+    expect(later.disposition.kind === 'settled' && reopenReason(later.disposition, facts({ summary: later.activity }))).toBe('user-input')
+  })
+
+  it('keeps a Snooze accepted before the replay: an older failure does not wake it, a later one does', async () => {
+    const { snooze, mergeHistory } = await import('../../src/domain/commands.ts')
+    const { wakeReason } = await import('../../src/domain/placement.ts')
+    const snoozed = snooze(record(), facts(), native, T0 + 3_600_000, T0 + 100)
+    if (!snoozed.ok) throw new Error('snooze refused')
+    const merged = mergeHistory(snoozed.record, [start(T0 + 5, 1), end(T0 + 9, 2)])
+    expect(merged.disposition.kind === 'snoozed' && wakeReason(merged.disposition, facts({ summary: merged.activity }), T0 + 200)).toBe(null)
+    const later = mergeHistory(snoozed.record, [start(T0 + 150, 1), end(T0 + 160, 2)])
+    expect(later.disposition.kind === 'snoozed' && wakeReason(later.disposition, facts({ summary: later.activity }), T0 + 200)).toBe('new-failure')
+  })
+
+  it('extends a reopen hold over replayed history and leaves records without new events untouched', async () => {
+    const { mergeHistory } = await import('../../src/domain/commands.ts')
+    const held = record({ autoSettleHold: { baselineUserInputAt: null, baselineTurnStartSeq: null } })
+    expect(mergeHistory(held, [human(T0 + 10, 1), start(T0 + 11, 2)]).autoSettleHold).toEqual({ baselineUserInputAt: T0 + 10, baselineTurnStartSeq: 2 })
+    expect(mergeHistory(held, [])).toBe(held)
+  })
+})

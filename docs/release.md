@@ -34,7 +34,7 @@
 
 | 门禁 | 状态 | 说明 |
 | --- | --- | --- |
-| F01–F11 功能 | 有证据 | 端到端 `scenario.mjs` 20/20、`features.mjs` 14/14；单元/组件 218 项 |
+| F01–F11 功能 | 有证据 | 端到端 `scenario.mjs` 20/20、`features.mjs` 14/14；单元/组件 222 项 |
 | A02 等待审批 / A03 新审批唤醒 | **通过（Linux Web）** | 本机无 bubblewrap，bash 不升级沙箱；以测试专用 `approval-gate` 夹具经真实审批流程触发 |
 | A07 搜索竞态 / A08 键盘 | 自动化 | `tests/client/sidebar.spec.tsx`（真实 DOM）+ e2e N09 |
 | A10 权限撤回 / guest | **缺** | 单机 owner 场景之外的 guest 连接未测试；Host 侧无独立鉴权逻辑（依赖 Gateway owner 鉴权） |

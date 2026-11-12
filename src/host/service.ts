@@ -22,7 +22,7 @@ import {
 import { NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
-  acknowledgeResult, autoSettle, foldActivity, reconcile, reopen, setPolicyOverride, settle, snooze,
+  acknowledgeResult, autoSettle, foldActivity, mergeHistory, reconcile, reopen, setPolicyOverride, settle, snooze,
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
 import { effectivePolicy, graceSince, isStricter, stricterWorkspaces } from '../domain/policy.ts'
@@ -728,11 +728,9 @@ export class T3SidebarService extends TypertRemoteService {
     if (this.disposed) return
     const committed = events !== null && await this.queue.run(async () => {
       const before = this.recordOf(sessionId, Date.now())
-      let activity = before.activity
-      for (const event of events) activity = foldActivity(activity, event)
-      if (activity !== before.activity) {
-        await this.commit({ ...before, activity, revision: before.revision + 1 }, before, 'history-rebuilt', null)
-      }
+      // A parking accepted while the replay ran keeps its meaning (mergeHistory).
+      const merged = mergeHistory(before, events)
+      if (merged !== before) await this.commit(merged, before, 'history-rebuilt', null)
       return true
     }).catch(() => false)
     if (committed && (this.historyInvalidations.get(sessionId) ?? 0) !== invalidations) {

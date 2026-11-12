@@ -176,6 +176,44 @@ export function foldActivity(summary: ActivitySummary, event: FoldableEvent): Ac
 }
 
 /**
+ * Merge a session's replayed history into its record. A parking (Snooze or
+ * Settle) accepted while the summary still missed older events keeps its
+ * meaning: replayed events that predate the parking advance its baselines, so
+ * only events after it can wake or reopen the task. A reopen hold is extended
+ * over every replayed event (conservative: it only keeps the hold longer).
+ * Returns the record unchanged when the replay adds nothing.
+ */
+export function mergeHistory(record: TaskRecord, events: readonly FoldableEvent[]): TaskRecord {
+  let activity = record.activity
+  for (const event of events) activity = foldActivity(activity, event)
+  if (activity === record.activity) return record
+  const latest = (current: number | null, values: readonly number[]): number | null =>
+    values.reduce<number | null>((best, value) => (best === null || value > best ? value : best), current)
+  const inputs = (before: number) => events.filter(e => e.type === 'user/message' && e.human && e.time < before).map(e => e.time)
+  const starts = (before: number) => events.filter(e => e.type === 'turn/start' && e.time < before).map(e => e.seq)
+  const ends = (before: number) => events.filter(e => e.type === 'turn/end' && e.reason !== 'forked' && e.time < before).map(e => e.seq)
+  let disposition = record.disposition
+  if (disposition.kind === 'settled') {
+    disposition = {
+      ...disposition,
+      baselineUserInputAt: latest(disposition.baselineUserInputAt, inputs(disposition.enteredAt)),
+      baselineTurnStartSeq: latest(disposition.baselineTurnStartSeq, starts(disposition.enteredAt)),
+    }
+  } else if (disposition.kind === 'snoozed') {
+    disposition = {
+      ...disposition,
+      baselineUserInputAt: latest(disposition.baselineUserInputAt, inputs(disposition.setAt)),
+      baselineTurnEndSeq: latest(disposition.baselineTurnEndSeq, ends(disposition.setAt)),
+    }
+  }
+  const hold = record.autoSettleHold === null ? null : {
+    baselineUserInputAt: latest(record.autoSettleHold.baselineUserInputAt, inputs(Number.POSITIVE_INFINITY)),
+    baselineTurnStartSeq: latest(record.autoSettleHold.baselineTurnStartSeq, starts(Number.POSITIVE_INFINITY)),
+  }
+  return next(record, { activity, disposition, autoSettleHold: hold })
+}
+
+/**
  * Durable reconciliation after facts change: materialize Snooze wakes, reopen
  * Settled tasks on new activity, release reopen holds. Returns `null` when the
  * record is unchanged. Archived sessions are frozen until restored.

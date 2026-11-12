@@ -396,6 +396,21 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(known('late')).toBe(true)
   })
 
+  it('keeps a session settled when its history replay lands after the user settled it', async () => {
+    const { service, host, rebuild } = await boot()
+    const old = Date.now() - 20 * DAY
+    appendStored(host, 's1', 'user/message', { source: { kind: 'user' } }, old)
+    appendStored(host, 's1', 'turn/start', {}, old + 1)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'completed' } }, old + 2)
+    // Settled from the incomplete (empty) summary, before the replay ran.
+    const settled = await service.command({ protocolVersion: 1, commandId: 'cmd-settle-cold', sessionId: 's1', expectedRevision: 0, observedPending: [], action: { kind: 'settle' } })
+    expect(settled).toMatchObject({ ok: true })
+    await rebuild('s1')
+    const task = service.getSnapshot(1).tasks.find(entry => entry.sessionId === 's1')!
+    expect(task.record.activity.lastUserInputAt).toBe(old)
+    expect(task.record.disposition).toMatchObject({ kind: 'settled', baselineUserInputAt: old, baselineTurnStartSeq: 1 })
+  })
+
   it('keeps a failed live fold unknown after catch-up clears it, until a replay succeeds', async () => {
     const { service, storage, emit, rebuild } = await boot()
     // A session created by this process would be known by its creation time…
