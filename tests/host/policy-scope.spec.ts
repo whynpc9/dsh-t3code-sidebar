@@ -217,6 +217,18 @@ describe('workspace policy overrides (P01)', () => {
     expect(global().workspaceEligibleSince['wa']).toBe(hostGrace)
   })
 
+  it('does not settle a session that joined a protected workspace while its facts were being read', async () => {
+    const { host, sweep, settled, setPolicy } = await boot((fake) => { fake.registry.workspaces.splice(0) })
+    await setPolicy({ workspaceOverrides: { wb: { mode: 'off' } } })
+    // While the sweep reads s1's activity, s1 joins the "off" workspace wb.
+    ;(host.ctx as unknown as { on(name: string, fn: unknown, prepend: boolean): void }).on('workspace/session-activity', async ({ sessionId }: { sessionId: string }, next: () => Promise<unknown[]>) => {
+      if (sessionId === 's1' && host.registry.workspaces.length === 0) host.registry.workspaces.push({ id: 'wb', sessionIds: ['s1'] })
+      return await next()
+    }, true)
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+  })
+
   it('settles nothing under workspace overrides while membership cannot be read', async () => {
     const { host, sweep, settled, setPolicy, service } = await boot()
     await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })

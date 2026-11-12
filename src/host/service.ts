@@ -1182,6 +1182,11 @@ export class T3SidebarService extends TypertRemoteService {
             native, createdAt: header.createdAt, now: Date.now(),
           })
           if (!decision.eligible || decision.deadline === null) return
+          // The registry is not serialized by this queue: membership may have
+          // changed during the reads above. Commit only under the judged rule;
+          // otherwise the next sweep records the change and its grace first.
+          const latest = this.memberships(0)
+          if (latest === null || (latest.get(record.sessionId) ?? null) !== workspaceId) return
           const stored = this.recordOf(record.sessionId, now)
           const settled = autoSettle(stored, facts, Date.now(), {
             anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: policy.revision,
