@@ -154,6 +154,22 @@ describe('workspace policy overrides (P01)', () => {
     expect(settled()).toEqual(['s2'])
   })
 
+  it('keeps the grace a workspace still owed when the session leaves it under the same rule', async () => {
+    const { host, sweep, settled, setPolicy, global } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    // Removing the "off" override is stricter for wa's members: they get a fresh window…
+    await setPolicy({ workspaceOverrides: {} })
+    const owed = global().workspaceEligibleSince['wa']!
+    expect(owed).toBeGreaterThan(Date.now() - 60_000)
+    // …which s1 keeps after leaving wa, although host:7 → host:7 is the same rule.
+    host.registry.workspaces.splice(0)
+    await sweep()
+    expect(global().sessionEligibleSince['s1']).toBe(owed)
+    expect(settled()).toEqual(['s2'])
+  })
+
   it('settles nothing under workspace overrides while membership cannot be read', async () => {
     const { host, sweep, settled, setPolicy, service } = await boot()
     await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })

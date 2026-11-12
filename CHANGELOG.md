@@ -25,7 +25,7 @@ All versions are internal alphas (R0); nothing has been published to npm. The ve
 ### Changed
 
 - `TimePolicy` gains `keepUnacknowledgedResults` and `workspaceOverrides`, and `TaskRecord` gains `resultAcknowledgedSeq`. Both default when read from older storage, so no migration is needed. Command actions gain `acknowledge-result`. Protocol stays at version 1, because both halves ship in one package.
-- Test count: 137 → 211 (DOM component tests for search races, keyboard navigation and the one-list window added).
+- Test count: 137 → 212 (DOM component tests for search races, keyboard navigation and the one-list window added).
 
 ## 0.1.0-alpha.1 — 2026-11-12 (#6)
 

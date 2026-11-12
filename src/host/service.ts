@@ -765,7 +765,15 @@ export class T3SidebarService extends TypertRemoteService {
       if (before === undefined) continue
       const from = effectivePolicy(global.policy, before === '' ? null : before)
       const to = effectivePolicy(global.policy, workspaceId === '' ? null : workspaceId)
-      if (from.identity !== to.identity) sessionEligibleSince[sessionId] = now
+      // Another rule: a fresh window. The same rule: the grace the former
+      // workspace still owed its members moves with the session (it no longer
+      // reaches the session through that workspace).
+      const carried = Math.max(
+        global.sessionEligibleSince[sessionId] ?? 0,
+        before === '' ? 0 : global.workspaceEligibleSince[before] ?? 0,
+        from.identity !== to.identity ? now : 0,
+      )
+      if (carried > 0) sessionEligibleSince[sessionId] = carried
     }
     for (const [sessionId, since] of Object.entries(global.sessionEligibleSince)) {
       if (sessionEligibleSince[sessionId] !== undefined || !this.headers.has(sessionId)) continue

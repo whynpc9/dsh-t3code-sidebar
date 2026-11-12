@@ -11,7 +11,7 @@
 | 不活跃自动 Settled（§3） | 已实现 | 默认 7 天（Host 侧事实已证实，未降级为默认 Off）；1–90 天或关闭；首次安装完整宽限 |
 | 作用域 Host 默认 → Workspace → Session（§2） | 已实现 | `TimePolicy.workspaceOverrides`：缺省=继承，`{mode:'off'}`，`{mode:'custom',days}`；Session 菜单“此会话不自动收起 / 跟随项目” |
 | 多 membership 与 `policyWorkspaceId`（§2） | 不需要 | Harness 0.2.2-rc.1 中会话 membership 要求 header cwd 等于工作区唯一的规范路径，一个会话至多属于一个工作区；因此不存储 `policyWorkspaceId`。若上游改为允许多 membership，应恢复此字段 |
-| 宽限范围（§2） | 已实现 | Host 默认变严（开启/缩短）→ 仅跟随默认的会话（`global.policyEligibleSince`）；某工作区有效窗口变严 → 仅其成员（`workspaceEligibleSince`）；会话因工作区增删而换规则 → 该会话（`sessionEligibleSince`，由每次 sweep 比较 `membership`）；关闭保留选项 → 全部 |
+| 宽限范围（§2） | 已实现 | Host 默认变严（开启/缩短）→ 仅跟随默认的会话（`global.policyEligibleSince`）；某工作区有效窗口变严 → 仅其成员（`workspaceEligibleSince`）；会话因工作区增删而换规则 → 该会话（`sessionEligibleSince`，由每次 sweep 比较 `membership`；规则不变时也带走原工作区尚未用完的宽限）；关闭保留选项 → 全部 |
 | `effectivePolicyIdentity` / `eligibilityEpoch` | 以规则身份字符串替代 | `effectivePolicy().identity`（如 `host:7`、`workspace:<id>:off`）；身份变化即视为作用域变化 |
 | 保留未确认结果/失败（§3） | 已实现 | `keepUnacknowledgedResults`、`keepUnacknowledgedFailures`；异常结果 = completed/aborted 以外的结束原因（error、blocked、max-tokens、interrupted、未知） |
 | 保留选项下的历史结果 | 已实现 | 开启任一保留选项时，结果可能早于本进程（安装前、Host 半边未运行期间）的超期候选，先在后台只读重放其存储日志，补齐最新结果后再判定；补齐前或日志不可读时跳过（`result-unknown`），不会假定没有结果，也不以摘要中可能已过时的结果判定；某次事件折叠写入失败后，在重放成功前一直视为未知 |
