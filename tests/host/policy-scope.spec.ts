@@ -521,6 +521,24 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(internal.resultHistoryKnown.call(service, 's1')).toBe(true)
   })
 
+  it('keeps an automatic settle when verification only recovers a result from before it', async () => {
+    const { service, host, sweep, settled, setPolicy, rebuild } = await boot()
+    const old = Date.now() - 20 * DAY
+    await rebuild('s1', 's2')
+    await sweep() // keep off: both settle from their (empty) summaries
+    expect(settled()).toEqual(['s1', 's2'])
+    // An old result surfaces in s1's log (e.g. the token changed while the Host was down)…
+    appendStored(host, 's1', 'turn/start', {}, old)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'error' } }, old + 1000)
+    await setPolicy({ keepUnacknowledgedFailures: true })
+    const internal = service as unknown as { unverified: Map<string, unknown>; verifyDue(): Promise<void> }
+    internal.unverified.set('s1', { token: 'changed', failures: 0, at: 0 })
+    await internal.verifyDue()
+    // …it is folded as history, but does not undo the settle it predates.
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.activity.lastTurnEnd).toMatchObject({ seq: 1 })
+    expect(settled()).toEqual(['s1', 's2'])
+  })
+
   it('leaves automatic settles alone without a keep protection, and never undoes a manual settle', async () => {
     const { service, sweep, settled, emit, rebuild, setPolicy } = await boot()
     const old = Date.now() - 20 * DAY

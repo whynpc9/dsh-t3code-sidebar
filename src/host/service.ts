@@ -1033,7 +1033,10 @@ export class T3SidebarService extends TypertRemoteService {
           let merged: TaskRecord = { ...replayed, revision: before.revision + 1 }
           // A newer result recovered here (e.g. a turn end whose live fold failed)
           // releases an automatic settle it overlapped, as the live fold would have.
-          if (activity.lastTurnEnd !== null && activity.lastTurnEnd.seq !== before.activity.lastTurnEnd?.seq) {
+          // Only a result at or after the parking can have overlapped it; older
+          // ones were folded above as history and leave the settle standing.
+          if (activity.lastTurnEnd !== null && activity.lastTurnEnd.seq !== before.activity.lastTurnEnd?.seq
+            && activity.lastTurnEnd.at >= since) {
             merged = releaseHeldAutoSettle(merged, candidate => this.holdsResult(candidate)) ?? merged
           }
           await this.commit(merged, before, 'missed-activity', null)
