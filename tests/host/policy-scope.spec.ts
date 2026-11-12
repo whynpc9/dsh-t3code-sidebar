@@ -372,6 +372,30 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(settled()).toEqual(['s1', 's2'])
   })
 
+  it('trusts creation time only for sessions created after the event listener was installed', async () => {
+    const storage = new MemoryDomainFacility()
+    let release!: () => void
+    storage.openGate = new Promise<void>((resolve) => { release = resolve })
+    const host = createFakeHost(storage)
+    hosts.push(host)
+    void (host.ctx as Context).plugin(T3SidebarService)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    // Created (and possibly finished a turn) while storage was still opening: its events were not observed.
+    host.headers.push({ id: 'early', createdAt: Date.now() })
+    storage.openGate = null
+    release()
+    const service = await new Promise<T3SidebarService>((resolve) => {
+      const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+      poll()
+    })
+    await service.ready
+    await new Promise(resolve => setTimeout(resolve, 5))
+    ;(service as unknown as { rememberHeader(header: unknown): void }).rememberHeader({ id: 'late', createdAt: Date.now() })
+    const known = (id: string) => internal(service).resultHistoryKnown.call(service, id)
+    expect(known('early')).toBe(false)
+    expect(known('late')).toBe(true)
+  })
+
   it('keeps a failed live fold unknown after catch-up clears it, until a replay succeeds', async () => {
     const { service, storage, emit, rebuild } = await boot()
     // A session created by this process would be known by its creation time…

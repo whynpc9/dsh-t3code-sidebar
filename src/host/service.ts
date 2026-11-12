@@ -150,8 +150,11 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly expiryRetry = new Map<string, { readonly failures: number; readonly at: number }>()
   /** Sessions whose event fold could not be persisted; catch-up recovers them. */
   private readonly failedFolds = new Set<string>()
-  /** When this service started: sessions created since then had every event observed live. */
-  private readonly startedAt = Date.now()
+  /**
+   * When the `session/event` listener was installed: sessions created after it
+   * had every event observed live. Infinite until then (nothing is vouched for).
+   */
+  private observingSince = Number.POSITIVE_INFINITY
   /** Sessions whose stored log was replayed into the summary by this process (latest result known). */
   private readonly historyFolded = new Set<string>()
   /**
@@ -213,6 +216,9 @@ export class T3SidebarService extends TypertRemoteService {
     this.ctx.on('session/event', (session: HostSession, event: HostSessionEvent) => {
       this.onSessionEvent(session, event)
     })
+    // Only from here on are new sessions' events folded live; anything created
+    // earlier (also while storage was opening) is replayed before it is trusted.
+    this.observingSince = Date.now()
     this.ctx.effect(() => () => this.dispose(), 't3Sidebar: scheduler and followers')
     await this.refreshHeaders()
     const refresh = setInterval(() => { void this.refreshHeaders() }, HEADER_REFRESH_MS)
@@ -693,7 +699,7 @@ export class T3SidebarService extends TypertRemoteService {
     if (this.failedFolds.has(sessionId) || this.historyInvalid.has(sessionId)) return false
     if (this.historyFolded.has(sessionId)) return true
     const header = this.headers.get(sessionId)
-    return header !== undefined && header.createdAt >= this.startedAt
+    return header !== undefined && header.createdAt > this.observingSince
   }
 
   /**

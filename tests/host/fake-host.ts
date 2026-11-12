@@ -23,7 +23,10 @@ export class MemoryDomainFacility {
   failAuditWrites = false
   /** When set, global writes wait for it (a slow disk). */
   globalGate: Promise<void> | null = null
+  /** When set, opening a domain waits for it (slow storage at startup). */
+  openGate: Promise<void> | null = null
   async open(spec: Spec) {
+    if (this.openGate !== null) await this.openGate
     let unit = this.data.get(spec.name)
     if (unit === undefined) {
       unit = { global: null, tables: new Map(Object.keys(spec.tables).map(name => [name, new Map()])) }
