@@ -1,0 +1,12 @@
+{
+  "phase": "restart",
+  "at": "2026-11-12T08:52:48.802Z",
+  "results": [
+    {
+      "id": "A04.host-restart-keeps-parking",
+      "pass": true,
+      "detail": "{\"a\":{\"section\":\"snoozed\",\"status\":\"new-result\"},\"b\":{\"section\":\"settled\",\"status\":\"failed\"}}"
+    }
+  ],
+  "errors": []
+}
