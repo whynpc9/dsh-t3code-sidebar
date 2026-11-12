@@ -51,6 +51,10 @@ describe('policyFromDraft', () => {
       autoSettleAfterDays: 7, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: true, workspaceOverrides: { wa: { mode: 'custom', days: 3 } },
     })
   })
+  it('keeps every stored override while the workspace list is not known', () => {
+    expect(policyFromDraft(draft, null)?.workspaceOverrides).toEqual({ wa: { mode: 'custom', days: 3 }, gone: { mode: 'off' } })
+  })
+
   it('refuses invalid day counts', () => {
     expect(policyFromDraft({ ...draft, days: '0' }, [])).toBeNull()
     expect(policyFromDraft({ ...draft, overrides: { wa: { mode: 'custom', days: '91' } } }, ['wa'])).toBeNull()
@@ -134,6 +138,15 @@ describe('SettingsPage', () => {
     await act(async () => { ackAll.click() })
     expect(command).toHaveBeenCalledTimes(1)
     expect(view.textContent).toContain('settings.preview.ackFailed(n=1)')
+  })
+
+  it('does not drop stored overrides when saving before the workspace list is ready', async () => {
+    const runtime = fakeRuntime({ backend: { policy } })
+    runtime.workspacesStore.set({ items: [], pinnedSessionIds: [], archivedSessionIds: [], phase: 'pending' })
+    const view = render(runtime)
+    const save = [...view.querySelectorAll('button')].find(button => button.textContent === 'settings.save')!
+    await act(async () => { save.click() })
+    expect(runtime.setPolicy).toHaveBeenCalledWith(expect.objectContaining({ workspaceOverrides: { wb: { mode: 'off' } } }))
   })
 
   it('says which plugin shadows the sidebar', async () => {

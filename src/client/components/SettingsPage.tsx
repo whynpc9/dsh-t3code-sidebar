@@ -57,11 +57,15 @@ function draftOf(policy: TimePolicy): Draft {
   }
 }
 
-/** The draft as a policy write, or null while a day count is invalid. Only listed workspaces keep overrides. */
-export function policyFromDraft(draft: Draft, workspaceIds: readonly string[]): PolicyDraft | null {
+/**
+ * The draft as a policy write, or null while a day count is invalid. With the
+ * workspace list known, only listed workspaces keep overrides (removed ones are
+ * pruned); while it is not (`null`: not loaded yet), every override is kept.
+ */
+export function policyFromDraft(draft: Draft, workspaceIds: readonly string[] | null): PolicyDraft | null {
   if (draft.enabled && !validDays(draft.days)) return null
   const workspaceOverrides: Record<string, WorkspacePolicyOverride> = {}
-  for (const workspaceId of workspaceIds) {
+  for (const workspaceId of workspaceIds ?? Object.keys(draft.overrides)) {
     const override = draft.overrides[workspaceId]
     if (override === undefined || override.mode === 'inherit') continue
     if (override.mode === 'off') { workspaceOverrides[workspaceId] = { mode: 'off' }; continue }
@@ -113,7 +117,11 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
     return () => { live = false }
   }, [host, view, runtime, backend.policy.revision])
 
-  const workspaceIds = useMemo(() => workspaces.items.map(item => item.workspaceId), [workspaces.items])
+  // Until the workspace list is ready an empty list proves nothing: keep the stored overrides.
+  const workspaceIds = useMemo(
+    () => (workspaces.phase === 'ready' ? workspaces.items.map(item => item.workspaceId) : null),
+    [workspaces.phase, workspaces.items],
+  )
   const pending = policyFromDraft(draft, workspaceIds)
   const pendingKey = pending === null ? null : JSON.stringify(pending)
 
