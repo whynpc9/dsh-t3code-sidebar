@@ -478,6 +478,31 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.autoSettleSkip).toBe('unacknowledged-result')
   })
 
+  it('releases the automatic settle when the turn end whose live fold failed is recovered by replay', async () => {
+    const { service, host, storage, sweep, settled, setPolicy, emit, rebuild } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/start', 0, {}, old)
+    appendStored(host, 's1', 'turn/start', {}, old)
+    await settleTick()
+    await setPolicy({ keepUnacknowledgedResults: true })
+    await rebuild('s1', 's2')
+    await sweep()
+    expect(settled()).toEqual(['s1', 's2'])
+    // The turn's end is committed to the log, but its live fold cannot be persisted.
+    const end = appendStored(host, 's1', 'turn/end', { reason: { kind: 'completed' } }, Date.now())
+    storage.failTableWrites = true
+    emit('s1', 'turn/end', end.seq, end.data, end.time)
+    await settleTick()
+    storage.failTableWrites = false
+    expect(settled()).toEqual(['s1', 's2'])
+    // Catch-up verifies the parked session by replay.
+    const internal = service as unknown as { unverified: Map<string, unknown>; verifyDue(): Promise<void> }
+    internal.unverified.set('s1', { token: 'changed', failures: 0, at: 0 })
+    await internal.verifyDue()
+    expect(settled()).toEqual(['s2'])
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.autoSettleSkip).toBe('unacknowledged-result')
+  })
+
   it('leaves automatic settles alone without a keep protection, and never undoes a manual settle', async () => {
     const { service, sweep, settled, emit, rebuild, setPolicy } = await boot()
     const old = Date.now() - 20 * DAY

@@ -939,6 +939,7 @@ export class T3SidebarService extends TypertRemoteService {
     try {
       // The reads below are judged against the parking they started under.
       const baseline = JSON.stringify(this.recordOf(sessionId, Date.now()).disposition)
+      const invalidations = this.historyInvalidations.get(sessionId) ?? 0
       const [events, pending] = await Promise.all([this.replayFoldable(sessionId), this.queryDurablePending(sessionId)])
       if (this.disposed) return
       const outcome = await this.queue.run(() => this.applyVerification(sessionId, entry.token, baseline, events, pending))
@@ -946,9 +947,15 @@ export class T3SidebarService extends TypertRemoteService {
       const current = this.unverified.get(sessionId)
       // A newer token arrived meanwhile: keep that one due for its own check.
       if (current !== undefined && current.token !== entry.token) return
-      if (outcome === 'verified') {
+      if (outcome === 'verified' || outcome === 'folded') {
         this.unverified.delete(sessionId)
         this.failedFolds.delete(sessionId)
+        // The whole log was replayed into the summary: its latest result is known
+        // (unless another fold failed while it was being read).
+        if (outcome === 'folded' && (this.historyInvalidations.get(sessionId) ?? 0) === invalidations) {
+          this.historyFolded.add(sessionId)
+          this.historyInvalid.delete(sessionId)
+        }
       } else if (outcome === 'stale') {
         // Re-parked while the reads ran: check again (not a failure, no backoff).
         this.unverified.set(sessionId, { ...entry, at: Date.now() })
@@ -975,8 +982,9 @@ export class T3SidebarService extends TypertRemoteService {
     const before = this.recordOf(sessionId, now)
     const since = parkedSince(before)
     let verified: boolean
+    let folded = false
     if (since === null) {
-      // Reopened meanwhile; the live path owns it from here.
+      // Reopened meanwhile; the live path owns it from here (nothing was folded).
       verified = true
     } else if (JSON.stringify(before.disposition) !== baseline) {
       return 'stale'
@@ -1011,12 +1019,20 @@ export class T3SidebarService extends TypertRemoteService {
         // The wake is decided by the first waking prefix; the summary keeps everything replayed.
         await this.commit({ ...woken, activity }, before, expired ? 'snooze-expired' : 'missed-activity', null)
         verified = true
+        folded = events !== null
       } else {
         // Without a wake, verification needs both the full replay and an
         // exact pending read: either missing cannot rule a wake out.
         verified = events !== null && pending.known
+        folded = verified
         if (verified && activity !== before.activity) {
-          await this.commit({ ...replayed, revision: before.revision + 1 }, before, 'missed-activity', null)
+          let merged: TaskRecord = { ...replayed, revision: before.revision + 1 }
+          // A newer result recovered here (e.g. a turn end whose live fold failed)
+          // releases an automatic settle it overlapped, as the live fold would have.
+          if (activity.lastTurnEnd !== null && activity.lastTurnEnd.seq !== before.activity.lastTurnEnd?.seq) {
+            merged = releaseHeldAutoSettle(merged, candidate => this.holdsResult(candidate)) ?? merged
+          }
+          await this.commit(merged, before, 'missed-activity', null)
         }
       }
     }
@@ -1024,7 +1040,7 @@ export class T3SidebarService extends TypertRemoteService {
       const global = domain.global.get()
       await domain.global.set({ ...global, seenRevisions: { ...global.seenRevisions, [sessionId]: token } }).catch(() => undefined)
     }
-    return verified ? 'verified' : 'failed'
+    return verified ? (folded ? 'folded' : 'verified') : 'failed'
   }
 
   /**
@@ -1436,7 +1452,8 @@ export function nearestSnoozeDeadline(
   return nearest
 }
 
-type VerifyOutcome = 'verified' | 'failed' | 'stale'
+/** `folded`: verified, and the whole replayed log is now in the summary. */
+type VerifyOutcome = 'verified' | 'folded' | 'failed' | 'stale'
 
 /** When the current parking began, or `null` for a normal task. */
 function parkedSince(record: TaskRecord): number | null {
