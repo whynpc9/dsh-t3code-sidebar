@@ -15,18 +15,19 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import {
-  CommandInputSchema, PolicyInputSchema, PROTOCOL_VERSION, TaskRecordSchema, TimePolicySchema, TransitionSchema,
-  type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type PolicyResult, type Snapshot,
-  type TaskView, type TransitionEntry,
+  CommandInputSchema, PolicyInputSchema, PreviewInputSchema, PROTOCOL_VERSION, TaskRecordSchema, TimePolicySchema, TransitionSchema,
+  type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type HeldResult, type PolicyPreview, type PolicyResult,
+  type Snapshot, type TaskView, type TransitionEntry,
 } from '../contracts/schema.ts'
 import { NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
-  autoSettle, foldActivity, reconcile, reopen, setPolicyOverride, settle, snooze,
+  acknowledgeResult, autoSettle, foldActivity, reconcile, reopen, setPolicyOverride, settle, snooze,
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
+import { effectivePolicy, graceSince, isStricter, stricterWorkspaces } from '../domain/policy.ts'
 import {
-  DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, emptyRecord, known, unknown,
+  DAY_MS, DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, MAX_AUTO_SETTLE_DAYS, emptyRecord, known, unknown,
   type ActivitySummary, type Known, type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
 import {
@@ -52,6 +53,16 @@ const GlobalSchema = z.object({
   seenRevisions: z.record(z.string(), z.string()).default({}),
   /** Native archive set at the last sweep; a session leaving it was restored. */
   archivedSeen: z.array(z.string()).default([]),
+  /**
+   * Grace start per workspace whose effective window became stricter (an
+   * override enabled or shortened, or removed in favor of a stricter Host
+   * default). Applies to that workspace's members only.
+   */
+  workspaceEligibleSince: z.record(z.string(), z.number()).default({}),
+  /** Workspace membership per session at the last sweep ('' = none); a change of rule restarts grace. */
+  membership: z.record(z.string(), z.string()).default({}),
+  /** Per-session grace start after its membership moved it under another rule. */
+  sessionEligibleSince: z.record(z.string(), z.number()).default({}),
 })
 type GlobalState = z.infer<typeof GlobalSchema>
 
@@ -59,10 +70,16 @@ const NOT_INSTALLED: GlobalState = {
   installationId: '',
   installedAt: 0,
   dataRevision: 0,
-  policy: { revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false },
+  policy: {
+    revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false,
+    keepUnacknowledgedResults: false, workspaceOverrides: {},
+  },
   policyEligibleSince: 0,
   seenRevisions: {},
   archivedSeen: [],
+  workspaceEligibleSince: {},
+  membership: {},
+  sessionEligibleSince: {},
 }
 
 export const TASK_DOMAIN = defineDomain({
@@ -85,6 +102,11 @@ const ACTIVITY_CONCURRENCY = 2
 const PENDING_READ_TIMEOUT_MS = 5_000
 const REPLAY_TIMEOUT_MS = 10_000
 const REPLAY_CHUNK = 512
+/** Workspace membership is re-read at most this often for views (sweeps always read it fresh). */
+const MEMBERSHIP_MAX_AGE_MS = 1000
+/** A grace start older than the longest window cannot postpone any deadline. */
+const GRACE_RETENTION_MS = MAX_AUTO_SETTLE_DAYS * DAY_MS
+const PREVIEW_HELD_MAX = 200
 
 type Domain = OpenDomain<TaskRecord, TransitionEntry, GlobalState>
 
@@ -138,6 +160,8 @@ export class T3SidebarService extends TypertRemoteService {
   private verification: Promise<void> | undefined
   /** Last activity answer per session and when it was taken. */
   private readonly activityCache = new Map<string, { readonly value: Known<readonly string[]>; readonly at: number; readonly failures: number }>()
+  /** Session → workspace id, read from the workspace registry (null: registry without a listing). */
+  private membershipCache: { readonly at: number; readonly map: ReadonlyMap<string, string> | null } | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
   /** Fixed instant of the next fallback sweep; commits never push it later. */
   private fallbackSweepAt = Date.now() + SWEEP_MS
@@ -236,21 +260,61 @@ export class T3SidebarService extends TypertRemoteService {
         revision: before.revision + 1,
         autoSettleAfterDays: parsed.data.autoSettleAfterDays,
         keepUnacknowledgedFailures: parsed.data.keepUnacknowledgedFailures,
+        keepUnacknowledgedResults: parsed.data.keepUnacknowledgedResults ?? before.keepUnacknowledgedResults,
+        workspaceOverrides: parsed.data.workspaceOverrides ?? before.workspaceOverrides,
       }
-      // Enabling or shortening the window starts a new grace period for everyone.
-      const fresh = policy.autoSettleAfterDays !== null
-        && (before.autoSettleAfterDays === null || policy.autoSettleAfterDays < before.autoSettleAfterDays)
-      const next: GlobalState = {
-        ...global,
-        policy,
-        dataRevision: global.dataRevision + 1,
-        policyEligibleSince: fresh ? Date.now() : global.policyEligibleSince,
-      }
+      const next: GlobalState = { ...withPolicyGrace(global, policy, Date.now()), dataRevision: global.dataRevision + 1 }
       await domain.global.set(next)
       this.publish([], policy)
       this.schedule()
       return { ok: true, policy }
     })
+  }
+
+  /**
+   * Evaluate a policy without writing. With a draft, the grace windows that
+   * saving it would start are applied too, so the preview shows what the
+   * saved policy would do. Display facts only (like the published views): the
+   * sweep re-reads activity and pending state before acting.
+   */
+  @Remote('previewPolicy')
+  previewPolicy(t3PreviewInput: unknown): PolicyPreview {
+    const input = PreviewInputSchema.parse(t3PreviewInput)
+    this.assertProtocol(input.protocolVersion)
+    const stored = this.requireDomain().global.get()
+    const now = Date.now()
+    const policy: TimePolicy = input.draft === null ? stored.policy : { ...input.draft, revision: stored.policy.revision }
+    const global = input.draft === null ? stored : withPolicyGrace(stored, policy, now)
+    const skips: Record<string, number> = {}
+    const held: HeldResult[] = []
+    let heldTotal = 0
+    let due = 0
+    let sessions = 0
+    let nextDeadline: PolicyPreview['nextDeadline'] = null
+    for (const header of this.headers.values()) {
+      sessions += 1
+      const workspaceId = this.workspaceOf(header.id)
+      const raw = this.recordOf(header.id, now)
+      const record = this.withGrace(raw, global, workspaceId)
+      const decision = decideAutoSettle({
+        policy, workspaceId, record,
+        facts: this.factsOf(record, this.cachedActivity(record), null, this.pendingCache.get(record.sessionId) ?? known([])),
+        native: this.nativeOf(record.sessionId),
+        createdAt: header.createdAt,
+        now,
+      })
+      if (decision.eligible) { due += 1; continue }
+      const skip = decision.skip ?? 'unknown'
+      skips[skip] = (skips[skip] ?? 0) + 1
+      if (skip === 'not-due' && decision.deadline !== null && (nextDeadline === null || decision.deadline < nextDeadline.at)) {
+        nextDeadline = { sessionId: header.id, at: decision.deadline }
+      }
+      if ((skip === 'unacknowledged-failure' || skip === 'unacknowledged-result') && raw.activity.lastTurnEnd !== null) {
+        heldTotal += 1
+        if (held.length < PREVIEW_HELD_MAX) held.push({ sessionId: header.id, turnEndSeq: raw.activity.lastTurnEnd.seq, reason: skip })
+      }
+    }
+    return { policyRevision: stored.policy.revision, evaluatedAt: now, sessions, due, nextDeadline, skips, held, heldTotal }
   }
 
   @Remote('listTransitions')
@@ -295,6 +359,7 @@ export class T3SidebarService extends TypertRemoteService {
       case 'settle': transition = settle(current, facts, native, now); break
       case 'reopen': transition = reopen(current, now); break
       case 'policy-override': transition = setPolicyOverride(current, input.action.override, now); break
+      case 'acknowledge-result': transition = acknowledgeResult(current, input.action.turnEndSeq); break
     }
     if (!transition.ok) {
       return { ok: false, code: transition.code satisfies TaskErrorCode, message: transition.message, task: this.viewOf(current) }
@@ -533,9 +598,11 @@ export class T3SidebarService extends TypertRemoteService {
     let autoSettleDeadline: number | null = null
     let autoSettleSkip: string | null = null
     if (header !== undefined) {
+      const workspaceId = this.workspaceOf(record.sessionId)
       const decision = decideAutoSettle({
         policy: global.policy,
-        record: this.withGlobalGrace(record, global),
+        workspaceId,
+        record: this.withGrace(record, global, workspaceId),
         // Display only: a session whose durable state was not read yet shows its
         // time-based status; the sweep reads exact pending state before acting.
         facts: this.factsOf(record, activity, null, this.pendingCache.get(record.sessionId) ?? known([])),
@@ -555,10 +622,77 @@ export class T3SidebarService extends TypertRemoteService {
     }
   }
 
-  private withGlobalGrace(record: TaskRecord, global: GlobalState): TaskRecord {
-    return record.policyEligibleSince >= global.policyEligibleSince
-      ? record
-      : { ...record, policyEligibleSince: global.policyEligibleSince }
+  /** The record with its effective grace start (record, Host, workspace and membership graces). */
+  private withGrace(record: TaskRecord, global: GlobalState, workspaceId: string | null): TaskRecord {
+    const since = graceSince({
+      recordSince: record.policyEligibleSince,
+      source: effectivePolicy(global.policy, workspaceId).source,
+      hostSince: global.policyEligibleSince,
+      workspaceSince: workspaceId === null ? undefined : global.workspaceEligibleSince[workspaceId],
+      sessionSince: global.sessionEligibleSince[record.sessionId],
+    })
+    return since === record.policyEligibleSince ? record : { ...record, policyEligibleSince: since }
+  }
+
+  /** Session → workspace id from the registry's synchronous projection; null without one. */
+  private memberships(maxAgeMs = MEMBERSHIP_MAX_AGE_MS): ReadonlyMap<string, string> | null {
+    const now = Date.now()
+    if (this.membershipCache !== undefined && now - this.membershipCache.at < maxAgeMs) return this.membershipCache.map
+    let map: Map<string, string> | null = null
+    const registry = optionalService<HostWorkspaceRegistry>(this.ctx, 'workspaceRegistry')
+    try {
+      if (registry?.list !== undefined) {
+        map = new Map()
+        for (const workspace of registry.list()) {
+          for (const sessionId of workspace.sessionIds) if (!map.has(sessionId)) map.set(sessionId, workspace.id)
+        }
+      }
+    } catch {
+      map = null
+    }
+    this.membershipCache = { at: now, map }
+    return map
+  }
+
+  private workspaceOf(sessionId: string, maxAgeMs?: number): string | null {
+    return this.memberships(maxAgeMs)?.get(sessionId) ?? null
+  }
+
+  /**
+   * Record workspace membership; a session that moved under another rule
+   * (its workspace was added or removed) gets a fresh grace window, so a
+   * scope change never settles a long-idle session at once (spec §2). New
+   * sessions need none: their anchor is their creation time.
+   */
+  private async trackMemberships(): Promise<void> {
+    const map = this.memberships(0)
+    if (map === null) return
+    const domain = this.requireDomain()
+    const global = domain.global.get()
+    const now = Date.now()
+    const previous = global.membership
+    const membership: Record<string, string> = {}
+    const sessionEligibleSince: Record<string, number> = {}
+    let changed = false
+    for (const sessionId of this.headers.keys()) {
+      const workspaceId = map.get(sessionId) ?? ''
+      membership[sessionId] = workspaceId
+      const before = previous[sessionId]
+      if (before === workspaceId) continue
+      changed = true
+      if (before === undefined) continue
+      const from = effectivePolicy(global.policy, before === '' ? null : before)
+      const to = effectivePolicy(global.policy, workspaceId === '' ? null : workspaceId)
+      if (from.identity !== to.identity) sessionEligibleSince[sessionId] = now
+    }
+    for (const [sessionId, since] of Object.entries(global.sessionEligibleSince)) {
+      if (sessionEligibleSince[sessionId] !== undefined || !this.headers.has(sessionId)) continue
+      if (since + GRACE_RETENTION_MS > now) sessionEligibleSince[sessionId] = since
+    }
+    if (Object.keys(previous).length !== Object.keys(membership).length) changed = true
+    if (Object.keys(sessionEligibleSince).length !== Object.keys(global.sessionEligibleSince).length) changed = true
+    if (!changed) return
+    await domain.global.set({ ...domain.global.get(), membership, sessionEligibleSince }).catch(() => undefined)
   }
 
   private async refreshHeaders(): Promise<void> {
@@ -887,35 +1021,43 @@ export class T3SidebarService extends TypertRemoteService {
       //    schedules); their completion emits no event this service folds.
       await this.refreshOutstandingActivity()
       // 3. Automatic settle: time pre-filter first, then fresh activity facts for due candidates.
-      if (global.policy.autoSettleAfterDays === null) return
-      const due: { record: TaskRecord; header: HostSessionHeader }[] = []
+      //    Membership is read first so a scope change grants its grace before any decision.
+      await this.trackMemberships()
+      const policy = domain.global.get().policy
+      const anyEnabled = policy.autoSettleAfterDays !== null
+        || Object.values(policy.workspaceOverrides).some(override => override.mode === 'custom')
+      if (!anyEnabled) return
+      const graced = domain.global.get()
+      const due: { record: TaskRecord; header: HostSessionHeader; workspaceId: string | null }[] = []
       for (const header of this.headers.values()) {
-        const record = this.withGlobalGrace(this.recordOf(header.id, now), global)
+        const workspaceId = this.workspaceOf(header.id)
+        const record = this.withGrace(this.recordOf(header.id, now), graced, workspaceId)
         if (record.disposition.kind !== 'normal') continue
         const timeOnly = decideAutoSettle({
-          policy: global.policy,
+          policy,
+          workspaceId,
           record,
           facts: { running: known(false), activity: known([]), pending: known([]), summary: record.activity },
           native: { pinned: false, archived: false },
           createdAt: header.createdAt,
           now,
         })
-        if (timeOnly.eligible) due.push({ record, header })
+        if (timeOnly.eligible) due.push({ record, header, workspaceId })
       }
       for (let index = 0; index < due.length; index += ACTIVITY_CONCURRENCY) {
         const batch = due.slice(index, index + ACTIVITY_CONCURRENCY)
-        await Promise.all(batch.map(async ({ record, header }) => {
+        await Promise.all(batch.map(async ({ record, header, workspaceId }) => {
           const activity = await this.queryActivity(record.sessionId)
           const facts = this.factsOf(record, activity, null, await this.queryDurablePending(record.sessionId))
           const native = this.nativeOf(record.sessionId)
-          const decision = decideAutoSettle({ policy: global.policy, record, facts, native, createdAt: header.createdAt, now: Date.now() })
+          const decision = decideAutoSettle({ policy, workspaceId, record, facts, native, createdAt: header.createdAt, now: Date.now() })
           if (!decision.eligible || decision.deadline === null) return
           const stored = this.recordOf(record.sessionId, now)
           const settled = autoSettle(stored, facts, Date.now(), {
-            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: global.policy.revision,
+            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: policy.revision,
           })
           await this.commit(settled, stored, 'idle-timeout', {
-            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: global.policy.revision,
+            anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: policy.revision,
           }).catch(() => undefined)
         }))
       }
@@ -1044,6 +1186,27 @@ export class T3SidebarService extends TypertRemoteService {
         { client: version, host: PROTOCOL_VERSION })
     }
   }
+}
+
+/**
+ * The global state after replacing the policy: enabling or shortening a
+ * window starts a new grace period, but only for the sessions that rule
+ * governs (the Host default's followers, or the members of a workspace whose
+ * effective window became stricter). Releasing a keep-unacknowledged
+ * protection is stricter for everyone: previously held results are judged
+ * with a fresh window (time-policy spec §3).
+ */
+export function withPolicyGrace(global: GlobalState, policy: TimePolicy, now: number): GlobalState {
+  const before = global.policy
+  const released = (before.keepUnacknowledgedFailures && !policy.keepUnacknowledgedFailures)
+    || (before.keepUnacknowledgedResults && !policy.keepUnacknowledgedResults)
+  const hostFresh = released || isStricter(before.autoSettleAfterDays, policy.autoSettleAfterDays)
+  const workspaceEligibleSince = { ...global.workspaceEligibleSince }
+  const fresh = released
+    ? Object.keys({ ...before.workspaceOverrides, ...policy.workspaceOverrides })
+    : stricterWorkspaces(before, policy)
+  for (const workspaceId of fresh) workspaceEligibleSince[workspaceId] = now
+  return { ...global, policy, policyEligibleSince: hostFresh ? now : global.policyEligibleSince, workspaceEligibleSince }
 }
 
 /** Union of pending signals by request key (sources may differ for the same request). */

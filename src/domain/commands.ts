@@ -138,6 +138,18 @@ export function setPolicyOverride(record: TaskRecord, override: SessionPolicyOve
   return { ok: true, record: next(record, { policyOverride: override, policyEligibleSince: override === 'inherit' ? now : record.policyEligibleSince }) }
 }
 
+/**
+ * Shared acknowledgement of a result (time-policy spec §3, `acknowledgeResult`):
+ * only a result the record has folded can be acknowledged, and the mark never
+ * moves backwards (acknowledging an older result again is a no-op).
+ */
+export function acknowledgeResult(record: TaskRecord, turnEndSeq: number): Transition {
+  const end = record.activity.lastTurnEnd
+  if (end === null || turnEndSeq > end.seq) return fail('NOT_FOUND', 'no such result yet')
+  const current = record.resultAcknowledgedSeq
+  return { ok: true, record: next(record, current !== null && current >= turnEndSeq ? {} : { resultAcknowledgedSeq: turnEndSeq }) }
+}
+
 /** Committed session event, reduced to the fields the summary folds. */
 export type FoldableEvent =
   | { readonly type: 'user/message'; readonly seq: number; readonly time: number; readonly human: boolean }

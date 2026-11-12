@@ -221,6 +221,28 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   // ── Dialogs ──
   const [workspaceDialog, setWorkspaceDialog] = useState<WorkspaceDialog | null>(null)
 
+  // ── Native ⌘K / ⌘O: the native workspace commands only raise requests for the
+  //    browser that owns this slot; consume them as the native browser would. ──
+  const requests = use(runtime.shortcutRequests)
+  const [seenSearchRequest, setSeenSearchRequest] = useState(requests.searchRequest)
+  useEffect(() => {
+    if (requests.searchRequest === seenSearchRequest) return
+    setSeenSearchRequest(requests.searchRequest)
+    setWorkspaceDialog(current => (current?.kind === 'add' ? null : current))
+    if (!wide || searchInput.current?.closest('[inert]')) {
+      setSearchOnExpand(true)
+      expandSidebar?.()
+    } else {
+      changeSearchExpanded(true)
+      focusSearch()
+    }
+  }, [requests.searchRequest])
+  useEffect(() => {
+    if (!requests.addRequested) return
+    setWorkspaceDialog({ kind: 'add' })
+    runtime.closeAddRequest()
+  }, [requests.addRequested, runtime])
+
   // ── Row environment ──
   const ready = backend.status === 'ready'
   const open = useCallback((row: Row) => {

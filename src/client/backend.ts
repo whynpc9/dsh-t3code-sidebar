@@ -21,10 +21,10 @@ import { z } from 'zod'
 import { NAMESPACE, PROTOCOL_MISMATCH_CODE, REMOTE_SPEC } from '../contracts/remote.ts'
 import {
   PROTOCOL_VERSION,
-  type Capabilities, type CommandAction, type CommandInput, type CommandResult, type FollowEvent, type PolicyResult,
+  type Capabilities, type CommandAction, type CommandInput, type CommandResult, type FollowEvent, type PolicyPreview, type PolicyResult,
   type Snapshot, type TaskView,
 } from '../contracts/schema.ts'
-import { reconcile, reopen, setPolicyOverride, settle, snooze, type Transition } from '../domain/commands.ts'
+import { acknowledgeResult, reconcile, reopen, setPolicyOverride, settle, snooze, type Transition } from '../domain/commands.ts'
 import {
   DEFAULT_AUTO_SETTLE_DAYS, EMPTY_ACTIVITY, emptyRecord, known,
   type NativeState, type PendingSignal, type TaskFacts, type TaskRecord, type TimePolicy,
@@ -91,16 +91,24 @@ export interface RecoveryNotice {
   readonly code?: string
 }
 
+/** Every editable policy field: what the settings page saves in one revision-checked write. */
+export type PolicyDraft = Omit<TimePolicy, 'revision'>
+
 export interface TaskBackend {
   readonly state: Store<BackendState>
   command(sessionId: string, action: CommandAction, context: CommandContext): Promise<CommandOutcome>
-  setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyOutcome>
+  setPolicy(draft: PolicyDraft): Promise<PolicyOutcome>
   listTransitions(limit: number): Promise<readonly { at: number; sessionId: string; from: string; to: string; reason: string }[]>
+  /** Evaluate the stored policy (draft null) or an unsaved draft; null when unavailable. */
+  previewPolicy(draft: PolicyDraft | null): Promise<PolicyPreview | null>
   dispose(): void
 }
 
 const NO_CAPABILITIES: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
-const DEFAULT_POLICY: TimePolicy = { revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false }
+const DEFAULT_POLICY: TimePolicy = {
+  revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false,
+  keepUnacknowledgedResults: false, workspaceOverrides: {},
+}
 
 export const initialBackendState: BackendState = {
   kind: 'connecting',
@@ -126,6 +134,7 @@ export interface T3Remote {
   command(input: unknown): Promise<RemoteResult<CommandResult>>
   setPolicy(input: unknown): Promise<RemoteResult<PolicyResult>>
   listTransitions(limit: number): Promise<RemoteResult<readonly { at: number; sessionId: string; from: string; to: string; reason: string }[]>>
+  previewPolicy?(input: unknown): Promise<RemoteResult<PolicyPreview>>
 }
 
 /** `ctx.inject` returns a cordis Fiber (disposed with `.dispose()`); older hosts returned a disposer. */
@@ -295,20 +304,23 @@ interface PendingCommand {
 }
 
 interface PendingPolicy {
-  readonly input: {
-    readonly protocolVersion: number
-    readonly expectedRevision: number
-    readonly autoSettleAfterDays: number | null
-    readonly keepUnacknowledgedFailures: boolean
-  }
+  readonly input: PolicyDraft & { readonly protocolVersion: number; readonly expectedRevision: number }
   attempts: number
   inFlight: boolean
 }
 
+/** Same editable values (revision aside); key order of the overrides does not matter. */
+export function sameDraft(left: PolicyDraft, right: PolicyDraft): boolean {
+  const overrides = (draft: PolicyDraft) => JSON.stringify(Object.entries(draft.workspaceOverrides)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+  return left.autoSettleAfterDays === right.autoSettleAfterDays
+    && left.keepUnacknowledgedFailures === right.keepUnacknowledgedFailures
+    && left.keepUnacknowledgedResults === right.keepUnacknowledgedResults
+    && overrides(left) === overrides(right)
+}
+
 const samePolicy = (left: TimePolicy, right: TimePolicy): boolean =>
-  left.revision === right.revision
-  && left.autoSettleAfterDays === right.autoSettleAfterDays
-  && left.keepUnacknowledgedFailures === right.keepUnacknowledgedFailures
+  left.revision === right.revision && sameDraft(left, right)
 
 export class HostBackend implements TaskBackend {
   readonly state: Store<BackendState>
@@ -541,13 +553,20 @@ export class HostBackend implements TaskBackend {
     else if (this.isReady()) this.recover()
   }
 
-  async setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyOutcome> {
+  async setPolicy(draft: PolicyDraft): Promise<PolicyOutcome> {
     const current = this.state.getSnapshot()
     if (!this.isReady()) {
       return { ok: false, code: 'BASELINE_PENDING', message: 'reconnecting: waiting for a fresh baseline', policy: current.policy }
     }
     return await this.sendPolicy({
-      input: { protocolVersion: PROTOCOL_VERSION, expectedRevision: current.policy.revision, autoSettleAfterDays: days, keepUnacknowledgedFailures: keepFailures },
+      input: {
+        protocolVersion: PROTOCOL_VERSION,
+        expectedRevision: current.policy.revision,
+        autoSettleAfterDays: draft.autoSettleAfterDays,
+        keepUnacknowledgedFailures: draft.keepUnacknowledgedFailures,
+        keepUnacknowledgedResults: draft.keepUnacknowledgedResults,
+        workspaceOverrides: draft.workspaceOverrides,
+      },
       attempts: 0,
       inFlight: false,
     })
@@ -613,8 +632,7 @@ export class HostBackend implements TaskBackend {
           // The revision moved: the original write committed (values equal the
           // request; an identical concurrent write has the same result) or
           // someone else changed the policy.
-          const same = outcome.policy.autoSettleAfterDays === request.autoSettleAfterDays
-            && outcome.policy.keepUnacknowledgedFailures === request.keepUnacknowledgedFailures
+          const same = sameDraft(outcome.policy, request)
           this.onRecovery({ kind: 'policy', outcome: same ? 'committed' : 'superseded' })
         })
       }
@@ -636,6 +654,17 @@ export class HostBackend implements TaskBackend {
           ? { kind: 'command', outcome: 'committed', sessionId }
           : { kind: 'command', outcome: 'not-applied', sessionId, code: outcome.code })
       })
+    }
+  }
+
+  async previewPolicy(draft: PolicyDraft | null): Promise<PolicyPreview | null> {
+    const api = this.api
+    if (api?.previewPolicy === undefined || !this.isReady()) return null
+    try {
+      const result = await api.previewPolicy({ protocolVersion: PROTOCOL_VERSION, draft })
+      return result.ok && result.value !== undefined ? result.value : null
+    } catch {
+      return null
     }
   }
 
@@ -692,7 +721,7 @@ export class LocalBackend implements TaskBackend {
       kind: 'local',
       status: 'ready',
       tasks: this.views(),
-      policy: { revision: 0, autoSettleAfterDays: null, keepUnacknowledgedFailures: false },
+      policy: { ...DEFAULT_POLICY, autoSettleAfterDays: null },
       capabilities: NO_CAPABILITIES,
       clockOffset: 0,
       reason,
@@ -781,6 +810,7 @@ export class LocalBackend implements TaskBackend {
         case 'settle': outcome = settle(current, facts, context.native, now); break
         case 'reopen': outcome = reopen(current, now); break
         case 'policy-override': outcome = setPolicyOverride(current, action.override, now); break
+        case 'acknowledge-result': outcome = acknowledgeResult(current, action.turnEndSeq); break
       }
       return outcome.ok ? outcome.record : null
     })
@@ -797,6 +827,8 @@ export class LocalBackend implements TaskBackend {
   }
 
   async listTransitions() { return [] }
+
+  async previewPolicy(): Promise<PolicyPreview | null> { return null }
 
   dispose(): void {
     this.disposed = true

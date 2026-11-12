@@ -1,6 +1,6 @@
 // Test stand-in for @deepseek-ai/dsh-client-ui-primitives (the running page
 // supplies the real module): inert components and the relative-time helper.
-import { Component, type ReactNode } from 'react'
+import { Component, type InputHTMLAttributes, type ReactNode } from 'react'
 
 const Inert = (): null => null
 const Passthrough = ({ children }: { children?: ReactNode }) => <>{children}</>
@@ -8,9 +8,12 @@ const Anchor = ({ anchor }: { anchor?: ReactNode }) => <>{anchor}</>
 
 export const StateDot = Inert
 export const Toast = Inert
-export const Switch = Inert
-export const Button = Passthrough
-export const Input = Inert
+// Minimal interactive stand-ins so component tests can press, type and toggle.
+export const Switch = ({ checked, disabled, onChange, label }: { checked: boolean; disabled?: boolean; onChange: (next: boolean) => void; label?: string }) =>
+  <input type="checkbox" role="switch" aria-label={label} checked={checked} disabled={disabled} onChange={(event) => { onChange(event.target.checked) }} />
+export const Button = ({ children, disabled, onClick }: { children?: ReactNode; disabled?: boolean; onClick?: () => void }) =>
+  <button type="button" disabled={disabled} onClick={onClick}>{children}</button>
+export const Input = ({ size: _size, ...props }: InputHTMLAttributes<HTMLInputElement> & { size?: unknown }) => <input {...props} />
 export const Modal = Passthrough
 export const Tooltip = Passthrough
 export const HoverCardGroup = Passthrough

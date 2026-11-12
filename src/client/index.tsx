@@ -21,8 +21,11 @@ import {
 import { SettingsPage } from './components/SettingsPage.tsx'
 import { TaskSidebar } from './components/Sidebar.tsx'
 import { en, NS, zh, type Key } from './locales.ts'
-import { buildRows, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot } from './model.ts'
+import {
+  autoSettleApplies, buildRows, heldResultOf, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot,
+} from './model.ts'
 import { DEFAULT_PREFS, migratePrefs, type MenuTarget, type Prefs, type Runtime } from './runtime.ts'
+import { NO_REQUESTS, watchSlot, type ShortcutRequests, type SlotEntryLike, type SlotsLike, type SlotStatus } from './native-bridge.ts'
 import { createStore, type Readable, type Store } from './store.ts'
 import { browserObservedWakes, WakeDispatcher } from './wakes.ts'
 
@@ -41,7 +44,7 @@ interface ClientCtx {
   slots: {
     inject(key: string, callback: () => unknown): () => void
     register(options: Record<string, unknown>, component: unknown): () => void
-  }
+  } & SlotsLike
   sessions: { list: Readable<SessionsSnapshot>; searchResultLimit: number; search(query: string, signal: AbortSignal): Promise<{ ok: boolean; value?: { items: { sessionId: string; snippet?: string }[]; hasMore: boolean } }> }
   workspaces: {
     list: Readable<WorkspacesSnapshot>
@@ -105,6 +108,19 @@ const EMPTY_STATUS: StatusSnapshot = new Map()
 const emptyStatus: Readable<StatusSnapshot> = { getSnapshot: () => EMPTY_STATUS, subscribe: () => () => {} }
 const noMenu: Readable<MenuTarget | null> = { getSnapshot: () => null, subscribe: () => () => {} }
 
+/** A store that forwards to whichever source is current (the slot watch lives in an effect). */
+function relay<T>(initial: T): { readable: Readable<T>; attach(source: Readable<T>): () => void } {
+  const store = createStore<T>(initial)
+  return {
+    readable: store,
+    attach(source) {
+      store.set(source.getSnapshot())
+      const stop = source.subscribe(() => { store.set(source.getSnapshot()) })
+      return () => { stop(); store.set(initial) }
+    },
+  }
+}
+
 export function apply(rawCtx: Context): void {
   const ctx = rawCtx as unknown as ClientCtx
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 't3Sidebar: dictionaries')
@@ -129,6 +145,9 @@ export function apply(rawCtx: Context): void {
   }
 
   let backend: TaskBackend | null = null
+  const slotStatus = relay<SlotStatus>({ known: false, active: true, winner: null })
+  const shortcutRequests = relay<ShortcutRequests>(NO_REQUESTS)
+  let closeAddRequest = (): void => {}
 
   /** Current browser-side facts for one session (used by commands and the local backend). */
   const liveFacts = (sessionId: string): { facts: TaskFacts; native: NativeState } | null => {
@@ -196,10 +215,11 @@ export function apply(rawCtx: Context): void {
       else ctx.contextMenus.open({ kind: 'session', value: { sessionId, displayTitle } }, point)
     },
     command,
-    setPolicy: async (days, keepFailures) => backend === null
+    setPolicy: async draft => backend === null
       ? { ok: false, code: 'STORAGE_UNAVAILABLE', message: 'not connected', policy: backendState.getSnapshot().policy }
-      : await backend.setPolicy(days, keepFailures),
+      : await backend.setPolicy(draft),
     listTransitions: async limit => backend === null ? [] : await backend.listTransitions(limit),
+    previewPolicy: async draft => backend === null ? null : await backend.previewPolicy(draft),
     search: async (query, signal) => {
       const result = await ctx.sessions.search(query, signal)
       if (!result.ok || result.value === undefined) throw new Error('search failed')
@@ -218,7 +238,26 @@ export function apply(rawCtx: Context): void {
     notify,
     snoozeRequest,
     notice,
+    slotStatus: slotStatus.readable,
+    shortcutRequests: shortcutRequests.readable,
+    closeAddRequest: () => { closeAddRequest() },
   }
+
+  // ── Slot registry: who renders the session browser, and the native ⌘K / ⌘O requests ──
+  const isOwn = (entry: SlotEntryLike): boolean => {
+    if (entry.component === TaskSidebar) return true
+    try { return (entry.inject as (() => Record<string, unknown>) | undefined)?.()?.['runtime'] === runtime } catch { return false }
+  }
+  ctx.effect(() => {
+    const watch = watchSlot(ctx.slots, 'sidebar.workspaces', isOwn)
+    const stops = [slotStatus.attach(watch.status), shortcutRequests.attach(watch.requests)]
+    closeAddRequest = () => { watch.closeAdd() }
+    return () => {
+      for (const stop of stops) stop()
+      closeAddRequest = () => {}
+      watch.dispose()
+    }
+  }, 't3Sidebar: slot registry')
 
   // ── Backend selection: Host namespace first, browser-only preview otherwise ──
   // Each run of this effect owns one connection attempt chain. Everything it
@@ -380,8 +419,12 @@ export function apply(rawCtx: Context): void {
       if (!row.native.pinned && row.placement !== 'settled') {
         items.push({ id: 'settle', label: t('menu.settle'), disabled, run: run({ kind: 'settle' }) })
       }
-      if (state.kind === 'host' && state.policy.autoSettleAfterDays !== null) {
-        const overridden = row.record?.policyOverride === 'disabled'
+      const held = state.kind === 'host' ? heldResultOf(row, state.policy) : null
+      if (held !== null) {
+        items.push({ id: 'acknowledge', label: t('menu.acknowledge'), disabled, run: run({ kind: 'acknowledge-result', turnEndSeq: held.turnEndSeq }) })
+      }
+      const overridden = row.record?.policyOverride === 'disabled'
+      if (state.kind === 'host' && (overridden || autoSettleApplies(row, state.policy))) {
         items.push({
           id: 'auto-settle',
           label: overridden ? t('menu.autoSettleOn') : t('menu.autoSettleOff'),

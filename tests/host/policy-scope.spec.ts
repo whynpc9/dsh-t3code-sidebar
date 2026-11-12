@@ -1,0 +1,234 @@
+/**
+ * Policy scopes (P01) and result acknowledgement (P04) on the Host service:
+ * workspace overrides, scoped grace windows, membership changes, the
+ * keep-unacknowledged protections, and the read-only policy preview.
+ */
+import { afterEach, describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import { T3SidebarService } from '../../src/host/service.ts'
+import type { CommandInput, PolicyPreview } from '../../src/contracts/schema.ts'
+import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
+
+const DAY = 24 * 3_600_000
+let hosts: FakeHost[] = []
+
+afterEach(async () => {
+  for (const host of hosts) await (host.ctx as unknown as { registry: { dispose?: () => unknown } }).registry?.dispose?.()
+  hosts = []
+})
+
+interface Global {
+  policyEligibleSince: number
+  installedAt: number
+  workspaceEligibleSince: Record<string, number>
+  sessionEligibleSince: Record<string, number>
+  membership: Record<string, string>
+}
+
+/** Two long-idle sessions (s1 in workspace "wa", s2 in none) whose install grace already passed. */
+async function boot(setup?: (host: FakeHost) => void) {
+  const storage = new MemoryDomainFacility()
+  const host = createFakeHost(storage)
+  const createdAt = Date.now() - 30 * DAY
+  host.headers.push({ id: 's1', createdAt }, { id: 's2', createdAt })
+  host.registry.workspaces.push({ id: 'wa', sessionIds: ['s1'] })
+  setup?.(host)
+  await (host.ctx as Context).plugin(T3SidebarService)
+  const service = await new Promise<T3SidebarService>((resolve) => {
+    const poll = () => { const s = (host.ctx as unknown as { get(n: string): unknown }).get('t3Sidebar') as T3SidebarService | undefined; if (s) resolve(s); else setTimeout(poll, 5) }
+    poll()
+  })
+  await service.ready
+  hosts.push(host)
+  const global = () => storage.data.get('t3_sidebar')!.global as Global
+  global().policyEligibleSince = 1
+  global().installedAt = 1
+  const sweep = () => (service as unknown as { sweep(): Promise<void> }).sweep()
+  const settled = () => service.getSnapshot(1).tasks
+    .filter(task => task.record.disposition.kind === 'settled').map(task => task.sessionId).sort()
+  const view = (id: string) => service.getSnapshot(1).tasks.find(task => task.sessionId === id)
+  const emit = (sessionId: string, type: string, seq: number, data: unknown, time: number) =>
+    (host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: sessionId }, { type, seq, time, data })
+  const setPolicy = (patch: Record<string, unknown>) => service.setPolicy({
+    protocolVersion: 1,
+    expectedRevision: service.getSnapshot(1).policy.revision,
+    autoSettleAfterDays: 7,
+    keepUnacknowledgedFailures: false,
+    ...patch,
+  })
+  return { host, service, storage, global, sweep, settled, view, emit, setPolicy }
+}
+
+const command = (patch: Partial<CommandInput> & Pick<CommandInput, 'action'>): CommandInput => ({
+  protocolVersion: 1, commandId: `cmd-${Math.random().toString(36).slice(2)}`, sessionId: 's1', expectedRevision: 0, observedPending: [], ...patch,
+})
+
+const settleTick = () => new Promise(resolve => setTimeout(resolve, 50))
+
+describe('workspace policy overrides (P01)', () => {
+  it('turns automatic settling off for one workspace while the Host default still applies elsewhere', async () => {
+    const { service, sweep, settled, setPolicy, view } = await boot()
+    expect(await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })).toMatchObject({ ok: true })
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    expect(service.previewPolicy({ protocolVersion: 1, draft: null }).skips).toEqual({ 'workspace-off': 1, parked: 1 })
+    // Once s1 has a record (any command), its published view names the skip reason.
+    await service.command(command({ action: { kind: 'policy-override', override: 'inherit' } }))
+    expect(view('s1')?.autoSettleSkip).toBe('workspace-off')
+  })
+
+  it('applies a custom workspace window when the Host default is off, after the fresh grace it starts', async () => {
+    const { sweep, settled, setPolicy, global } = await boot()
+    const savedAt = Date.now()
+    expect(await setPolicy({ autoSettleAfterDays: null, workspaceOverrides: { wa: { mode: 'custom', days: 2 } } })).toMatchObject({ ok: true })
+    // Enabling a window for the workspace starts its grace now, for its members only.
+    expect(global().workspaceEligibleSince['wa']).toBeGreaterThanOrEqual(savedAt)
+    expect(global().policyEligibleSince).toBe(1) // turning the Host default off grants no grace
+    await sweep()
+    expect(settled()).toEqual([])
+    global().workspaceEligibleSince['wa'] = 1 // the grace has run out
+    await sweep()
+    expect(settled()).toEqual(['s1'])
+  })
+
+  it('records the workspace rule on idle-timeout settles and in the audit', async () => {
+    const { service, sweep, setPolicy, global } = await boot()
+    await setPolicy({ autoSettleAfterDays: null, workspaceOverrides: { wa: { mode: 'custom', days: 3 } } })
+    global().workspaceEligibleSince['wa'] = 1
+    await sweep()
+    const task = service.getSnapshot(1).tasks.find(entry => entry.sessionId === 's1')!
+    expect(task.record.disposition).toMatchObject({ kind: 'settled', reason: 'idle-timeout', policyRevision: 1 })
+    const disposition = task.record.disposition as { deadline: number; anchorAt: number }
+    expect(disposition.deadline - disposition.anchorAt).toBe(3 * DAY)
+    expect(service.listTransitions(10)).toMatchObject([{ sessionId: 's1', reason: 'idle-timeout', policyRevision: 1 }])
+  })
+
+  it('starts no grace when a workspace override becomes more lenient', async () => {
+    const { setPolicy, global } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
+    expect(global().workspaceEligibleSince['wa']).toBeUndefined()
+    const removedAt = Date.now()
+    // Back to the 7-day default: stricter for wa's members.
+    await setPolicy({ workspaceOverrides: {} })
+    expect(global().workspaceEligibleSince['wa']).toBeGreaterThanOrEqual(removedAt)
+  })
+
+  it('gives a session a fresh grace window when its workspace (and so its rule) changes', async () => {
+    const { host, sweep, settled, setPolicy, global } = await boot()
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'off' } } })
+    await sweep()
+    expect(global().membership).toEqual({ s1: 'wa', s2: '' })
+    expect(settled()).toEqual(['s2'])
+    // The workspace is removed: s1 now follows the 7-day default.
+    const movedAt = Date.now()
+    host.registry.workspaces.splice(0)
+    await sweep()
+    expect(global().sessionEligibleSince['s1']).toBeGreaterThanOrEqual(movedAt)
+    expect(settled()).toEqual(['s2'])
+    global().sessionEligibleSince['s1'] = 1
+    await sweep()
+    expect(settled()).toEqual(['s1', 's2'])
+  })
+
+  it('validates override values on the Host', async () => {
+    const { setPolicy } = await boot()
+    expect(await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 0 } } })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
+    expect(await setPolicy({ workspaceOverrides: { wa: { mode: 'never' } } })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
+  })
+})
+
+describe('result acknowledgement (P04)', () => {
+  it('keeps an unacknowledged result under keepUnacknowledgedResults until it is acknowledged', async () => {
+    const { service, sweep, settled, setPolicy, emit, global } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/start', 3, {}, old)
+    emit('s1', 'turn/end', 4, { reason: { kind: 'completed' } }, old)
+    await settleTick()
+    await setPolicy({ keepUnacknowledgedResults: true })
+    await sweep()
+    expect(settled()).toEqual(['s2'])
+    const held = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!
+    expect(held.autoSettleSkip).toBe('unacknowledged-result')
+
+    const future = await service.command(command({ expectedRevision: held.record.revision, action: { kind: 'acknowledge-result', turnEndSeq: 9 } }))
+    expect(future).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    const ack = await service.command(command({ expectedRevision: held.record.revision, action: { kind: 'acknowledge-result', turnEndSeq: 4 } }))
+    expect(ack).toMatchObject({ ok: true, task: { record: { resultAcknowledgedSeq: 4 } } })
+    // Acknowledging an older result again never moves the mark backwards.
+    const again = await service.command(command({ expectedRevision: held.record.revision + 1, action: { kind: 'acknowledge-result', turnEndSeq: 2 } }))
+    expect(again).toMatchObject({ ok: true, task: { record: { resultAcknowledgedSeq: 4 } } })
+    global().policyEligibleSince = 1
+    await sweep()
+    expect(settled()).toEqual(['s1', 's2'])
+  })
+
+  it('treats blocked, max-tokens, interrupted and unknown endings as failures', async () => {
+    const { service, sweep, setPolicy, emit } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/end', 4, { reason: { kind: 'max-tokens' } }, old)
+    emit('s2', 'turn/end', 4, { reason: { kind: 'aborted' } }, old)
+    await settleTick()
+    await setPolicy({ keepUnacknowledgedFailures: true })
+    await sweep()
+    const tasks = service.getSnapshot(1).tasks
+    expect(tasks.find(task => task.sessionId === 's1')).toMatchObject({ record: { disposition: { kind: 'normal' } }, autoSettleSkip: 'unacknowledged-failure' })
+    expect(tasks.find(task => task.sessionId === 's2')).toMatchObject({ record: { disposition: { kind: 'settled' } } })
+  })
+
+  it('starts a fresh grace window when a keep protection is released', async () => {
+    const { setPolicy, global } = await boot()
+    await setPolicy({ keepUnacknowledgedFailures: true, workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
+    const releasedAt = Date.now()
+    await setPolicy({ keepUnacknowledgedFailures: false, workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
+    expect(global().policyEligibleSince).toBeGreaterThanOrEqual(releasedAt)
+    expect(global().workspaceEligibleSince['wa']).toBeGreaterThanOrEqual(releasedAt)
+  })
+
+  it('reads acknowledgement-free records written before this field existed', async () => {
+    const storage = new MemoryDomainFacility()
+    const unit = await storage.open({ name: 't3_sidebar', tables: { tasks: { valueSchema: { parse: (v: unknown) => v } as never }, transitions: { valueSchema: { parse: (v: unknown) => v } as never } } })
+    await unit.table('tasks').put('s1', {
+      sessionId: 's1', revision: 2, disposition: { kind: 'normal' }, autoSettleHold: null, policyOverride: 'inherit',
+      policyEligibleSince: 1, lastSnoozeWakeAt: null,
+      activity: { lastUserInputAt: null, lastTurnStartAt: null, lastTurnStartSeq: null, lastTurnEnd: null }, receipts: [],
+    })
+    const { TaskRecordSchema } = await import('../../src/contracts/schema.ts')
+    expect(TaskRecordSchema.parse(unit.table('tasks').get('s1')).resultAcknowledgedSeq).toBeNull()
+  })
+})
+
+describe('previewPolicy', () => {
+  it('counts due sessions, skip reasons and held results without writing', async () => {
+    const { service, emit, storage } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/end', 4, { reason: { kind: 'error' } }, old)
+    await settleTick()
+    const before = JSON.stringify(storage.data.get('t3_sidebar')!.global)
+    const current = service.previewPolicy({ protocolVersion: 1, draft: null })
+    expect(current).toMatchObject<Partial<PolicyPreview>>({ policyRevision: 0, sessions: 2, due: 2, heldTotal: 0 })
+    const draft = service.previewPolicy({
+      protocolVersion: 1,
+      draft: { autoSettleAfterDays: 7, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} },
+    })
+    expect(draft).toMatchObject({ due: 1, heldTotal: 1, held: [{ sessionId: 's1', turnEndSeq: 4, reason: 'unacknowledged-failure' }] })
+    expect(JSON.stringify(storage.data.get('t3_sidebar')!.global)).toBe(before)
+  })
+
+  it('applies the grace a draft would start, and reports the next deadline', async () => {
+    const { service } = await boot()
+    const preview = service.previewPolicy({
+      protocolVersion: 1,
+      draft: { autoSettleAfterDays: 3, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: { wa: { mode: 'off' } } },
+    })
+    // Shortening 7 → 3 days starts a fresh grace for the Host default's followers: nothing is due yet.
+    expect(preview.due).toBe(0)
+    expect(preview.skips).toMatchObject({ 'not-due': 1, 'workspace-off': 1 })
+    expect(preview.nextDeadline?.sessionId).toBe('s2')
+    expect(preview.nextDeadline!.at).toBeGreaterThan(Date.now() + 2.9 * DAY)
+  })
+
+  it('rejects another protocol version', async () => {
+    const { service } = await boot()
+    expect(() => service.previewPolicy({ protocolVersion: 2, draft: null })).toThrow(/protocol/)
+  })
+})

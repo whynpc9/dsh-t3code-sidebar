@@ -11,8 +11,8 @@
  */
 import { z, type ZodType } from 'zod'
 import {
-  CommandInputSchema, CommandResultSchema, FollowEventSchema, PolicyInputSchema, PolicyResultSchema,
-  SnapshotSchema, TransitionSchema,
+  CommandInputSchema, CommandResultSchema, FollowEventSchema, PolicyInputSchema, PolicyPreviewSchema, PolicyResultSchema,
+  PreviewInputSchema, SnapshotSchema, TransitionSchema,
 } from './schema.ts'
 
 export const PACKAGE = 'dsh-t3code-sidebar'
@@ -79,6 +79,13 @@ export const REMOTE_SPEC = {
       description: 'Replace the automatic-settle policy (revision-checked).',
       parameters: [param('t3PolicyInput', PolicyInputSchema, 'PolicyInput')],
       result: codec(PolicyResultSchema, 'PolicyResult'),
+    },
+    [`${NAMESPACE}/previewPolicy`]: {
+      service: SERVICE_KEY,
+      invocation: direct,
+      description: 'Evaluate the current policy or an unsaved draft without writing: due sessions, next deadline, skip reasons, held results.',
+      parameters: [param('t3PreviewInput', PreviewInputSchema, 'PreviewInput')],
+      result: codec(PolicyPreviewSchema, 'PolicyPreview'),
     },
     [`${NAMESPACE}/listTransitions`]: {
       service: SERVICE_KEY,

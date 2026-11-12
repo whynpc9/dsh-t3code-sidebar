@@ -48,13 +48,26 @@ export const TaskRecordSchema = z.object({
   policyEligibleSince: z.number(),
   lastSnoozeWakeAt: nullableNumber,
   activity: ActivitySummarySchema,
+  /** Absent in records written before result acknowledgement existed. */
+  resultAcknowledgedSeq: nullableNumber.default(null),
   receipts: z.array(z.object({ commandId: z.string(), revision: z.number(), digest: z.string() })).readonly(),
 })
 
+const DaysSchema = z.number().int().min(1).max(90)
+
+/** Absent key = inherit the Host default; `off` and `custom` are explicit. */
+export const WorkspacePolicyOverrideSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('off') }),
+  z.object({ mode: z.literal('custom'), days: DaysSchema }),
+])
+
 export const TimePolicySchema = z.object({
   revision: z.number().int().nonnegative(),
-  autoSettleAfterDays: z.number().int().min(1).max(90).nullable(),
+  autoSettleAfterDays: DaysSchema.nullable(),
   keepUnacknowledgedFailures: z.boolean(),
+  /** Defaults keep policies stored before these fields existed readable. */
+  keepUnacknowledgedResults: z.boolean().default(false),
+  workspaceOverrides: z.record(z.string(), WorkspacePolicyOverrideSchema).default({}),
 })
 
 /** Per-session view the Host publishes: its record plus Host-only facts. */
@@ -107,6 +120,8 @@ export const CommandActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('settle') }),
   z.object({ kind: z.literal('reopen') }),
   z.object({ kind: z.literal('policy-override'), override: z.enum(['inherit', 'disabled']) }),
+  /** Shared "I have seen this result" for the keep-unacknowledged protections (time-policy spec §3). */
+  z.object({ kind: z.literal('acknowledge-result'), turnEndSeq: z.number().int().nonnegative() }),
 ])
 
 /**
@@ -138,8 +153,49 @@ export const CommandResultSchema = z.discriminatedUnion('ok', [
 export const PolicyInputSchema = z.object({
   protocolVersion: z.number(),
   expectedRevision: z.number().int().nonnegative(),
-  autoSettleAfterDays: z.number().int().min(1).max(90).nullable(),
+  autoSettleAfterDays: DaysSchema.nullable(),
   keepUnacknowledgedFailures: z.boolean(),
+  /** Omitted: keep the stored value. */
+  keepUnacknowledgedResults: z.boolean().optional(),
+  /** Omitted: keep the stored overrides; otherwise replaces all of them. */
+  workspaceOverrides: z.record(z.string(), WorkspacePolicyOverrideSchema).optional(),
+})
+
+/** Every editable policy field (a settings draft). */
+export const PolicyDraftSchema = z.object({
+  autoSettleAfterDays: DaysSchema.nullable(),
+  keepUnacknowledgedFailures: z.boolean(),
+  keepUnacknowledgedResults: z.boolean(),
+  workspaceOverrides: z.record(z.string(), WorkspacePolicyOverrideSchema),
+})
+
+/** `previewPolicy`: evaluate the current policy, or an unsaved draft, without writing. */
+export const PreviewInputSchema = z.object({
+  protocolVersion: z.number(),
+  draft: PolicyDraftSchema.nullable(),
+})
+
+export const HeldResultSchema = z.object({
+  sessionId: z.string(),
+  turnEndSeq: z.number(),
+  reason: z.enum(['unacknowledged-failure', 'unacknowledged-result']),
+})
+
+export const PolicyPreviewSchema = z.object({
+  /** Revision of the stored policy the preview started from. */
+  policyRevision: z.number(),
+  evaluatedAt: z.number(),
+  /** Top-level sessions evaluated. */
+  sessions: z.number(),
+  /** Sessions that would settle at the next sweep (at most a minute away). */
+  due: z.number(),
+  /** Earliest future deadline among sessions only waiting for time to pass. */
+  nextDeadline: z.object({ sessionId: z.string(), at: z.number() }).nullable(),
+  /** Count per skip reason (`AutoSettleSkip`), excluding due sessions. */
+  skips: z.record(z.string(), z.number()),
+  /** Results that hold a session under a keep-unacknowledged protection (first 200). */
+  held: z.array(HeldResultSchema),
+  heldTotal: z.number(),
 })
 
 export const PolicyResultSchema = z.discriminatedUnion('ok', [
@@ -168,4 +224,8 @@ export type CommandResult = z.infer<typeof CommandResultSchema>
 export type PolicyInput = z.infer<typeof PolicyInputSchema>
 export type PolicyResult = z.infer<typeof PolicyResultSchema>
 export type TransitionEntry = z.infer<typeof TransitionSchema>
+export type PolicyDraftInput = z.infer<typeof PolicyDraftSchema>
+export type PreviewInput = z.infer<typeof PreviewInputSchema>
+export type PolicyPreview = z.infer<typeof PolicyPreviewSchema>
+export type HeldResult = z.infer<typeof HeldResultSchema>
 export type Capabilities = z.infer<typeof CapabilitiesSchema>

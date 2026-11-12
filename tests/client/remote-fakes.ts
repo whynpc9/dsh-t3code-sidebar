@@ -67,7 +67,7 @@ export class FakeStream implements FollowStream {
   }
 }
 
-export const POLICY: TimePolicy = { revision: 0, autoSettleAfterDays: 7, keepUnacknowledgedFailures: false }
+export const POLICY: TimePolicy = { revision: 0, autoSettleAfterDays: 7, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} }
 
 export function taskView(sessionId: string, revision: number, kind: 'normal' | 'settled' = 'normal'): TaskView {
   const base = { ...emptyRecord(sessionId, 0), activity: EMPTY_ACTIVITY, revision }

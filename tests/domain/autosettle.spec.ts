@@ -4,7 +4,7 @@ import { reopen, settle } from '../../src/domain/commands.ts'
 import { DAY_MS, type TimePolicy } from '../../src/domain/types.ts'
 import { T0, facts, native, question, record } from './fixtures.ts'
 
-const policy: TimePolicy = { revision: 1, autoSettleAfterDays: 7, keepUnacknowledgedFailures: false }
+const policy: TimePolicy = { revision: 1, autoSettleAfterDays: 7, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} }
 const idle = facts()
 const decide = (patch: Partial<Parameters<typeof decideAutoSettle>[0]>) => decideAutoSettle({
   policy, record: record({ policyEligibleSince: T0 }), facts: idle, native, createdAt: T0, now: T0, ...patch,
@@ -61,6 +61,6 @@ describe('decideAutoSettle', () => {
     const failed = facts({ summary: { lastTurnEnd: { seq: 2, at: T0, reason: 'error' } } })
     const late = T0 + 30 * DAY_MS
     expect(decide({ now: late, facts: failed }).eligible).toBe(true)
-    expect(decide({ now: late, facts: failed, policy: { ...policy, keepUnacknowledgedFailures: true } }).skip).toBe('unacknowledged-failure')
+    expect(decide({ now: late, facts: failed, policy: { ...policy, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} } }).skip).toBe('unacknowledged-failure')
   })
 })

@@ -12,6 +12,9 @@ import { T3SidebarService } from '../../src/host/service.ts'
 import { EMPTY_ACTIVITY, known } from '../../src/domain/types.ts'
 import { createFakeHost, MemoryDomainFacility, type FakeHost } from './fake-host.ts'
 
+const draft = (days: number | null, keepFailures: boolean) =>
+  ({ autoSettleAfterDays: days, keepUnacknowledgedFailures: keepFailures, keepUnacknowledgedResults: false, workspaceOverrides: {} })
+
 const HOUR = 3_600_000
 const context: CommandContext = {
   native: { pinned: false, archived: false },
@@ -241,7 +244,7 @@ describe('two windows against the Host', () => {
     let release!: () => void
     storage.globalGate = new Promise<void>((resolve) => { release = resolve })
     linkA.faults.dropNextPolicyCall = true
-    expect(await a.backend.setPolicy(3, true)).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
+    expect(await a.backend.setPolicy(draft(3, true))).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
     await settle()
     // The replacement baseline was taken while the write waited on storage.
     expect(a.backend.state.getSnapshot().policy.revision).toBe(0)
@@ -250,7 +253,7 @@ describe('two windows against the Host', () => {
     release()
     await settle()
     expect(a.notices).toEqual([{ kind: 'policy', outcome: 'committed' }])
-    expect(service.getSnapshot(1).policy).toEqual({ revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true })
+    expect(service.getSnapshot(1).policy).toEqual({ revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} })
     expect(a.backend.state.getSnapshot().policy.revision).toBe(1)
   })
 
@@ -261,11 +264,11 @@ describe('two windows against the Host', () => {
     const b = window(link(() => service).remote, service)
     await settle()
     linkA.faults.loseNextPolicyReply = true
-    expect(await a.backend.setPolicy(3, true)).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
+    expect(await a.backend.setPolicy(draft(3, true))).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
     await settle()
     expect(a.notices).toEqual([{ kind: 'policy', outcome: 'committed' }])
     const policy = service.getSnapshot(1).policy
-    expect(policy).toEqual({ revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true })
+    expect(policy).toEqual({ revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} })
     expect(a.backend.state.getSnapshot().policy).toEqual(policy)
     expect(b.backend.state.getSnapshot().policy).toEqual(policy)
   })

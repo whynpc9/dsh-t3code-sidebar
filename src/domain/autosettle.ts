@@ -3,10 +3,12 @@
  * scheduler feeds facts and commits the result through its serial queue.
  */
 import { effectiveDisposition } from './placement.ts'
+import { effectivePolicy, heldResult, type PolicySource } from './policy.ts'
 import { DAY_MS, type NativeState, type TaskFacts, type TaskRecord, type TimePolicy } from './types.ts'
 
 export type AutoSettleSkip =
   | 'policy-off'
+  | 'workspace-off'
   | 'session-disabled'
   | 'reopen-hold'
   | 'archived'
@@ -19,6 +21,7 @@ export type AutoSettleSkip =
   | 'pending-unknown'
   | 'pending'
   | 'unacknowledged-failure'
+  | 'unacknowledged-result'
   | 'not-due'
 
 export interface AutoSettleDecision {
@@ -28,6 +31,9 @@ export interface AutoSettleDecision {
   readonly anchorAt: number
   /** Instant after which the session is due; `null` when the policy is off. */
   readonly deadline: number | null
+  /** Effective window and where it comes from (Host default or workspace override). */
+  readonly days: number | null
+  readonly source: PolicySource
 }
 
 const maxOf = (...values: readonly (number | null | undefined)[]): number => {
@@ -54,6 +60,8 @@ export function inactivityAnchor(record: TaskRecord, createdAt: number): number 
  */
 export function decideAutoSettle(input: {
   readonly policy: TimePolicy
+  /** The session's workspace (selects a workspace override); null or omitted: none. */
+  readonly workspaceId?: string | null
   readonly record: TaskRecord
   readonly facts: TaskFacts
   readonly native: NativeState
@@ -62,11 +70,13 @@ export function decideAutoSettle(input: {
 }): AutoSettleDecision {
   const { policy, record, facts, native, createdAt, now } = input
   const anchorAt = inactivityAnchor(record, createdAt)
-  const days = policy.autoSettleAfterDays
+  const effective = effectivePolicy(policy, input.workspaceId ?? null)
+  const days = effective.days
   const deadline = days === null ? null : Math.max(anchorAt, record.policyEligibleSince) + days * DAY_MS
-  const skip = (reason: AutoSettleSkip): AutoSettleDecision => ({ eligible: false, skip: reason, anchorAt, deadline })
+  const skip = (reason: AutoSettleSkip): AutoSettleDecision =>
+    ({ eligible: false, skip: reason, anchorAt, deadline, days, source: effective.source })
 
-  if (days === null || deadline === null) return skip('policy-off')
+  if (days === null || deadline === null) return skip(effective.source === 'workspace' ? 'workspace-off' : 'policy-off')
   if (record.policyOverride === 'disabled') return skip('session-disabled')
   if (record.autoSettleHold !== null) return skip('reopen-hold')
   if (native.archived) return skip('archived')
@@ -78,9 +88,8 @@ export function decideAutoSettle(input: {
   if (facts.activity.value.length > 0) return skip('active-work')
   if (!facts.pending.known) return skip('pending-unknown')
   if (facts.pending.value.length > 0) return skip('pending')
-  if (policy.keepUnacknowledgedFailures && facts.summary.lastTurnEnd?.reason === 'error') {
-    return skip('unacknowledged-failure')
-  }
+  const held = heldResult(policy, facts.summary, record.resultAcknowledgedSeq)
+  if (held !== null) return skip(held)
   if (!(now > deadline)) return skip('not-due')
-  return { eligible: true, skip: null, anchorAt, deadline }
+  return { eligible: true, skip: null, anchorAt, deadline, days, source: effective.source }
 }

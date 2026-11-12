@@ -6,10 +6,11 @@
  * a session is placed identically everywhere.
  */
 import { derivePlacement, rowStatus, type RowStatus } from '../domain/placement.ts'
+import { effectivePolicy, heldResult } from '../domain/policy.ts'
 import { comparatorFor, type SortInput } from '../domain/sort.ts'
 import {
   EMPTY_ACTIVITY, PLACEMENTS, known, unknown,
-  type NativeState, type PendingSignal, type Placement, type TaskFacts, type TaskRecord,
+  type NativeState, type PendingSignal, type Placement, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
 import type { TaskView } from '../contracts/schema.ts'
 
@@ -410,4 +411,25 @@ export function nextFocusIndex(key: string, index: number, count: number): numbe
     case 'End': return count - 1
     default: return null
   }
+}
+
+/**
+ * The keep-unacknowledged protection holding this session's latest result,
+ * when automatic settling applies to it at all (its effective rule is on and
+ * the session is not exempt); null otherwise.
+ */
+export function heldResultOf(
+  row: Pick<Row, 'record' | 'workspaceId'>, policy: TimePolicy,
+): { readonly reason: 'unacknowledged-failure' | 'unacknowledged-result'; readonly turnEndSeq: number } | null {
+  const record = row.record
+  if (record === undefined || record.policyOverride === 'disabled') return null
+  if (effectivePolicy(policy, row.workspaceId).days === null) return null
+  const reason = heldResult(policy, record.activity, record.resultAcknowledgedSeq)
+  const end = record.activity.lastTurnEnd
+  return reason === null || end === null ? null : { reason, turnEndSeq: end.seq }
+}
+
+/** Whether automatic settling can apply to this session's scope (its effective rule is on). */
+export function autoSettleApplies(row: Pick<Row, 'workspaceId'>, policy: TimePolicy): boolean {
+  return effectivePolicy(policy, row.workspaceId).days !== null
 }
