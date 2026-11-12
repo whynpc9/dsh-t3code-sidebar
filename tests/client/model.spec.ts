@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildRows, flatRows, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, flatRows, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ModelInputs, type Row, type SessionRow,
 } from '../../src/client/model.ts'
 import { migratePrefs, DEFAULT_PREFS } from '../../src/client/runtime.ts'
@@ -133,21 +133,44 @@ describe('search', () => {
   it('matches titles locally, then appends content hits once each with their snippets', () => {
     const rows = buildRows(inputs())
     const results = searchResults(rows, 'title b', [{ sessionId: 'd', snippet: '…zebra…' }, { sessionId: 'b' }], 'default', 50)
-    expect(results.map(result => [result.row.sessionId, result.snippet])).toEqual([['b', null], ['d', '…zebra…']])
+    expect(results.items.map(result => [result.row.sessionId, result.snippet])).toEqual([['b', null], ['d', '…zebra…']])
+    expect(results.truncated).toBe(false)
+  })
+
+  it('reports truncation when local and content matches together exceed the limit', () => {
+    const rows = buildRows(inputs())
+    // Four local title matches, no content hits: the Host reports nothing more, the cap does.
+    expect(searchResults(rows, 'title', [], 'default', 2)).toMatchObject({ truncated: true })
+    expect(searchResults(rows, 'title', [], 'default', 4)).toMatchObject({ truncated: false })
+    // One local match plus one distinct content hit over a limit of one.
+    expect(searchResults(rows, 'title b', [{ sessionId: 'd' }], 'default', 1)).toMatchObject({ truncated: true })
   })
 
   it('never matches blank sessions and honours the limit and archived filter', () => {
     const base = inputs()
     const rows = buildRows({ ...base, workspaces: { ...base.workspaces, archivedSessionIds: ['a'] } })
-    expect(searchResults(rows, 'title', [], 'default', 50).map(result => result.row.sessionId)).not.toContain('a')
-    expect(searchResults(rows, 'title', [], 'default', 2)).toHaveLength(2)
-    expect(searchResults(rows, 'cur', [], 'show', 50)).toEqual([])
+    expect(searchResults(rows, 'title', [], 'default', 50).items.map(result => result.row.sessionId)).not.toContain('a')
+    expect(searchResults(rows, 'title', [], 'default', 2).items).toHaveLength(2)
+    expect(searchResults(rows, 'cur', [], 'show', 50).items).toEqual([])
   })
 
   it('keeps queries within the session.search contract', () => {
     expect(sanitizeQuery('a\0b')).toBe('ab')
     expect(sanitizeQuery('x'.repeat(600))).toHaveLength(500)
     expect(sanitizeQuery(`${'x'.repeat(499)}😀`)).toHaveLength(499)
+  })
+})
+
+describe('list keyboard navigation', () => {
+  it('moves down, up, home and end within bounds and ignores other keys', () => {
+    expect(nextFocusIndex('ArrowDown', 1, 4)).toBe(2)
+    expect(nextFocusIndex('ArrowDown', 3, 4)).toBe(3)
+    expect(nextFocusIndex('ArrowUp', 0, 4)).toBe(0)
+    expect(nextFocusIndex('ArrowUp', 2, 4)).toBe(1)
+    expect(nextFocusIndex('Home', 3, 4)).toBe(0)
+    expect(nextFocusIndex('End', 0, 4)).toBe(3)
+    expect(nextFocusIndex('Enter', 0, 4)).toBeNull()
+    expect(nextFocusIndex('ArrowDown', 0, 0)).toBeNull()
   })
 })
 

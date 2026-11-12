@@ -142,6 +142,18 @@ try {
     record('F03.tool-turn-observed', bashState !== null, JSON.stringify(bashState))
     await page.screenshot({ path: join(outDir, '02-states.png') })
 
+    // N09: arrow keys move focus between rows (group headers and sessions).
+    await page.locator('[data-section] .t3sb-group-row').first().focus()
+    const focusedKey = () => page.evaluate(() => document.activeElement?.getAttribute('data-row-key') ?? document.activeElement?.className ?? null)
+    const start = await focusedKey()
+    await page.keyboard.press('ArrowDown')
+    const down = await focusedKey()
+    await page.keyboard.press('End')
+    const end = await focusedKey()
+    await page.keyboard.press('Home')
+    const home = await focusedKey()
+    record('N09.arrow-key-navigation', start !== down && down?.startsWith('session:') === true && end !== home && home === start, JSON.stringify({ start, down, end, home }))
+
     // N05: Archive lives in the row's "…" menu (the native session menu).
     const doneRow = rowIn(page, done)
     await doneRow.hover()

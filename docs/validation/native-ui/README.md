@@ -6,9 +6,9 @@
 
 ## 结果
 
-`pnpm run verify`：类型检查、148 项单元测试、构建（client 40.4 KiB gzip）、pack 检查全部通过。
+`pnpm run verify`：类型检查、150 项单元测试、构建（client 约 40 KiB gzip）、pack 检查全部通过。
 
-端到端（[`tests/e2e/scenario.mjs`](../../../tests/e2e/scenario.mjs)）：main 阶段 18/18、restart 阶段 1/1 通过（[results-main.json](e2e/results-main.json)、[results-restart.json](e2e/results-restart.json)）。控制台中只有 4–5 条 404 资源请求，与 M0 记录相同，并非本插件引起。
+端到端（[`tests/e2e/scenario.mjs`](../../../tests/e2e/scenario.mjs)）：main 阶段 19/19、restart 阶段 1/1 通过（[results-main.json](e2e/results-main.json)、[results-restart.json](e2e/results-restart.json)）。控制台中只有 4–5 条 404 资源请求，与 M0 记录相同，并非本插件引起。
 
 | 检查 | 结果 | 说明 |
 | --- | --- | --- |
@@ -20,6 +20,7 @@
 | N06 收起按钮 | 通过 | 失败后空闲的会话经悬停按钮进入 Settled |
 | N07 取消收起按钮 | 通过 | Settled 行的悬停按钮使其回到 Active，第二个窗口同步 |
 | N08 设置在插件页 | 通过 | 视图选项“侧栏设置…”打开插件详情页中的设置区 |
+| N09 方向键导航 | 通过 | 行获得焦点时 ↓ / ↑ / Home / End 在分组行与会话行之间移动焦点 |
 | F01 分组方式记忆 | 通过 | 选“单列表”后刷新仍为 `flat` |
 | F08 添加工作区 | 通过 | 标题行的添加按钮 → 对话框 |
 | A02 / F03 / F04 / A06 / A11 | 通过 | Working、失败可见、Snooze、双窗口 baseline 与 delta、单一赢家 |

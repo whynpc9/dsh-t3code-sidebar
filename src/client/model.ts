@@ -339,6 +339,12 @@ export interface SearchResult {
   readonly snippet: string | null
 }
 
+export interface SearchResultSet {
+  readonly items: readonly SearchResult[]
+  /** More sessions matched than `limit` allows (local and content matches combined). */
+  readonly truncated: boolean
+}
+
 /**
  * Search results: local title / workspace / id matches by recency, then the
  * Host's content matches in their order, each session once, capped at `limit`.
@@ -346,9 +352,9 @@ export interface SearchResult {
  */
 export function searchResults(
   rows: readonly Row[], query: string, content: readonly ContentHit[], filter: ArchivedFilter, limit: number,
-): SearchResult[] {
+): SearchResultSet {
   const q = query.trim().toLowerCase()
-  if (q === '') return []
+  if (q === '') return { items: [], truncated: false }
   const eligible = rows.filter(row => !row.blank && visibleUnder(row, filter))
   const byId = new Map(eligible.map(row => [row.sessionId, row]))
   const snippets = new Map<string, string>()
@@ -365,5 +371,23 @@ export function searchResults(
     || row.sessionId.toLowerCase().includes(q)).sort(byRecency)
   for (const row of local) include(row)
   for (const hit of content) include(byId.get(hit.sessionId))
-  return ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null }))
+  return {
+    items: ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null })),
+    truncated: ordered.length > limit,
+  }
+}
+
+/** Keys that move focus between list rows (the arrow keys and Home / End). */
+export type ListKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End'
+
+/** Index of the row a list-navigation key moves focus to, or null for any other key. */
+export function nextFocusIndex(key: string, index: number, count: number): number | null {
+  if (count === 0) return null
+  switch (key) {
+    case 'ArrowDown': return Math.min(count - 1, index + 1)
+    case 'ArrowUp': return Math.max(0, index - 1)
+    case 'Home': return 0
+    case 'End': return count - 1
+    default: return null
+  }
 }

@@ -6,7 +6,7 @@
  * results. The rail (collapsed sidebar) keeps search and add workspace as
  * 36px controls. Settings live on this plugin's page under Plugins.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import {
   AnimatedRows, HoverCardGroup, IconAlarmClockOutlineRegular, IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular,
   IconArchiveOutlineRegular, IconCheckCircleOutlineRegular, IconChecklistOutlineRegular, IconCloseFillRegular,
@@ -16,7 +16,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Key } from '../locales.ts'
 import {
-  buildRows, flatRows, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, flatRows, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ArchivedFilter, type ContentHit, type GroupBy, type Row, type SectionKey,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
@@ -369,7 +369,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
 
   const searchView = () => {
     const currentRemote = remote.query === normalizedQuery ? remote : { query: normalizedQuery, status: 'loading' as const, items: [], hasMore: false }
-    const results = searchResults(rows, normalizedQuery, currentRemote.items, archivedFilter, runtime.searchLimit)
+    const { items: results, truncated } = searchResults(rows, normalizedQuery, currentRemote.items, archivedFilter, runtime.searchLimit)
     const pending = currentRemote.status === 'loading'
     return (
       <div className="t3sb-tree-body t3sb-wide">
@@ -391,10 +391,24 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
             </div>
           )}
           {!pending && results.length === 0 && <div className="t3sb-empty">{t('search.noMatches')}</div>}
-          {currentRemote.hasMore && <div className="t3sb-search-status">{t('search.hasMore', { n: runtime.searchLimit })}</div>}
+          {(currentRemote.hasMore || truncated) && <div className="t3sb-search-status">{t('search.hasMore', { n: runtime.searchLimit })}</div>}
         </div>
       </div>
     )
+  }
+
+  // Arrow keys, Home and End move focus between rows (group headers, sessions, search results)
+  // while a row itself has focus; Tab still walks into a row's own buttons.
+  const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    const rowsInView = [...event.currentTarget.querySelectorAll<HTMLElement>('.t3sb-group-row, .t3sb-session-row, .t3sb-search-row')]
+    const index = rowsInView.indexOf(event.target as HTMLElement)
+    if (index < 0) return
+    const next = nextFocusIndex(event.key, index, rowsInView.length)
+    if (next === null) return
+    event.preventDefault()
+    rowsInView[next]?.focus()
+    rowsInView[next]?.scrollIntoView({ block: 'nearest' })
   }
 
   const connection = backend.status === 'stale'
@@ -468,7 +482,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         </div>
       )}
 
-      <div className="t3sb-list-area">
+      <div className="t3sb-list-area" onKeyDown={onListKeyDown}>
         {wide && (normalizedQuery !== '' ? searchView() : (
           <HoverCardGroup className="t3sb-tree-body t3sb-wide">
             <AnimatedRows className={cx('t3sb-list', groupBy === 'flat' && 't3sb-flat-list')} role="tree" label={label}

@@ -1,6 +1,6 @@
 {
   "phase": "main",
-  "at": "2026-11-12T08:54:27.884Z",
+  "at": "2026-11-12T09:22:50.851Z",
   "results": [
     {
       "id": "N01.default-grouping-status",
@@ -43,6 +43,11 @@
       "id": "F03.tool-turn-observed",
       "pass": true,
       "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "N09.arrow-key-navigation",
+      "pass": true,
+      "detail": "{\"start\":\"group:status:active\",\"down\":\"session:session-78922c9a-2d9d-4f46-ae00-0da0a8e9121c\",\"end\":\"session:session-686da936-288d-40a2-8dbf-59c77eaae533\",\"home\":\"group:status:active\"}"
     },
     {
       "id": "N05.archive-in-more-menu",
