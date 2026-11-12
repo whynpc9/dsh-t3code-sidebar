@@ -112,7 +112,8 @@ describe('workspace policy overrides (P01)', () => {
   it('starts no grace when a workspace override becomes more lenient', async () => {
     const { setPolicy, global } = await boot()
     await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
-    expect(global().workspaceEligibleSince['wa']).toBeUndefined()
+    // No fresh window: only the (long expired) Host grace its members were owed carries over.
+    expect(global().workspaceEligibleSince['wa']).toBe(1)
     const removedAt = Date.now()
     // Back to the 7-day default: stricter for wa's members.
     await setPolicy({ workspaceOverrides: {} })
@@ -197,6 +198,23 @@ describe('workspace policy overrides (P01)', () => {
     release()
     await pass
     expect(settled()).toEqual(['s2'])
+  })
+
+  it('keeps the Host grace a workspace still owed when it starts overriding the default with a longer window', async () => {
+    const { sweep, settled, setPolicy, global } = await boot()
+    // Enabling the Host default starts a grace for its followers (s1 and s2)…
+    await setPolicy({ autoSettleAfterDays: null })
+    await setPolicy({ autoSettleAfterDays: 7 })
+    const hostGrace = global().policyEligibleSince
+    expect(hostGrace).toBeGreaterThan(Date.now() - 60_000)
+    // …and wa switching to a longer window must not drop what s1 is still owed.
+    await setPolicy({ workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
+    expect(global().workspaceEligibleSince['wa']).toBe(hostGrace)
+    await sweep()
+    expect(settled()).toEqual([])
+    // An unchanged override keeps its grace.
+    await setPolicy({ keepUnacknowledgedResults: false, workspaceOverrides: { wa: { mode: 'custom', days: 30 } } })
+    expect(global().workspaceEligibleSince['wa']).toBe(hostGrace)
   })
 
   it('settles nothing under workspace overrides while membership cannot be read', async () => {

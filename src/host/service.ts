@@ -1327,7 +1327,8 @@ export class T3SidebarService extends TypertRemoteService {
  * governs (the Host default's followers, or the members of a workspace whose
  * effective window became stricter). Releasing a keep-unacknowledged
  * protection is stricter for everyone: previously held results are judged
- * with a fresh window (time-policy spec §3).
+ * with a fresh window (time-policy spec §3). A workspace that newly overrides
+ * the default keeps the Host grace its members were still owed.
  */
 export function withPolicyGrace(global: GlobalState, policy: TimePolicy, now: number): GlobalState {
   const before = global.policy
@@ -1338,6 +1339,13 @@ export function withPolicyGrace(global: GlobalState, policy: TimePolicy, now: nu
   const fresh = released
     ? Object.keys({ ...before.workspaceOverrides, ...policy.workspaceOverrides })
     : stricterWorkspaces(before, policy)
+  // A workspace that starts overriding the Host default leaves the Host grace
+  // behind (it applies to Host followers only): carry what its members were
+  // still owed into the workspace grace. Unchanged overrides keep theirs.
+  for (const workspaceId of Object.keys(policy.workspaceOverrides)) {
+    if (before.workspaceOverrides[workspaceId] !== undefined) continue
+    workspaceEligibleSince[workspaceId] = Math.max(workspaceEligibleSince[workspaceId] ?? 0, global.policyEligibleSince)
+  }
   for (const workspaceId of fresh) workspaceEligibleSince[workspaceId] = now
   return { ...global, policy, policyEligibleSince: hostFresh ? now : global.policyEligibleSince, workspaceEligibleSince }
 }
