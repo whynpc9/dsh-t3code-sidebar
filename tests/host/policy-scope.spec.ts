@@ -441,6 +441,27 @@ describe('history knowledge for keep protections (review follow-ups)', () => {
     expect(task.record.disposition).toMatchObject({ kind: 'settled', baselineUserInputAt: old, baselineTurnStartSeq: 1 })
   })
 
+  it('does not settle a session whose turn ended while the sweep held the queue', async () => {
+    const { service, host, sweep, settled, setPolicy, emit, rebuild } = await boot()
+    const old = Date.now() - 20 * DAY
+    emit('s1', 'turn/start', 3, {}, old)
+    await settleTick()
+    await setPolicy({ keepUnacknowledgedResults: true })
+    await rebuild('s1', 's2')
+    // s1's turn ends while the sweep is reading its facts: the fold waits behind the sweep.
+    let ended = false
+    ;(host.ctx as unknown as { on(name: string, fn: unknown, prepend: boolean): void }).on('workspace/session-activity', async ({ sessionId }: { sessionId: string }, next: () => Promise<unknown[]>) => {
+      if (sessionId === 's1' && !ended) { ended = true; emit('s1', 'turn/end', 4, { reason: { kind: 'completed' } }, old + 1000) }
+      return await next()
+    }, true)
+    await sweep()
+    await settleTick()
+    expect(settled()).toEqual(['s2'])
+    const s1 = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!
+    expect(s1.record.activity.lastTurnEnd).toMatchObject({ seq: 4 })
+    expect(s1.autoSettleSkip).toBe('unacknowledged-result')
+  })
+
   it('keeps a failed live fold unknown after catch-up clears it, until a replay succeeds', async () => {
     const { service, storage, emit, rebuild } = await boot()
     // A session created by this process would be known by its creation time…

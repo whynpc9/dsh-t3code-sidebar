@@ -150,6 +150,8 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly expiryRetry = new Map<string, { readonly failures: number; readonly at: number }>()
   /** Sessions whose event fold could not be persisted; catch-up recovers them. */
   private readonly failedFolds = new Set<string>()
+  /** Foldable events received per session (counted on arrival, before their fold runs). */
+  private readonly foldableEvents = new Map<string, number>()
   /**
    * When the `session/event` listener was installed: sessions created after it
    * had every event observed live. Infinite until then (nothing is vouched for).
@@ -1064,6 +1066,9 @@ export class T3SidebarService extends TypertRemoteService {
     this.observedLive.add(sessionId)
     const foldable = toFoldable(event)
     if (foldable === null) return
+    // Counted now, folded later: a sweep that started earlier must not judge
+    // the summary this event is still waiting to change.
+    this.foldableEvents.set(sessionId, (this.foldableEvents.get(sessionId) ?? 0) + 1)
     void this.queue.run(async () => {
       const now = Date.now()
       const before = this.recordOf(sessionId, now)
@@ -1103,6 +1108,10 @@ export class T3SidebarService extends TypertRemoteService {
   /** Materialize Snooze expiries and commit due automatic settles. */
   private async sweep(): Promise<void> {
     if (this.disposed || this.domain === undefined) return
+    // Taken when the sweep joins the queue: folds of events received after this
+    // run only after the sweep, so their sessions are left to the next sweep.
+    const eventMark = new Map(this.foldableEvents)
+    const unfolded = (sessionId: string): boolean => (this.foldableEvents.get(sessionId) ?? 0) !== (eventMark.get(sessionId) ?? 0)
     await this.queue.run(async () => {
       const domain = this.requireDomain()
       const now = Date.now()
@@ -1187,6 +1196,8 @@ export class T3SidebarService extends TypertRemoteService {
           // otherwise the next sweep records the change and its grace first.
           const latest = this.memberships(0)
           if (latest === null || (latest.get(record.sessionId) ?? null) !== workspaceId) return
+          // A committed event (e.g. the turn end with a new result) that is not folded yet.
+          if (unfolded(record.sessionId)) return
           const stored = this.recordOf(record.sessionId, now)
           const settled = autoSettle(stored, facts, Date.now(), {
             anchorAt: decision.anchorAt, deadline: decision.deadline, policyRevision: policy.revision,
