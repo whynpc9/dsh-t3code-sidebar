@@ -1,7 +1,7 @@
 {
   "name": "dsh-t3code-sidebar",
-  "version": "0.1.0-alpha.0",
-  "description": "T3 Code style task sidebar for DeepSeek Harness: Pinned / Active / Working / Snoozed / Settled sections plus a project view.",
+  "version": "0.1.0-alpha.1",
+  "description": "T3 Code style task sidebar for DeepSeek Harness, composed like the native Workspaces browser: group sessions by status (Pinned / Active / Working / Snoozed / Settled), by workspace, or in one list.",
   "license": "MIT",
   "packageManager": "pnpm@11.20.0",
   "type": "module",

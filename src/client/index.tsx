@@ -2,10 +2,12 @@
  * dsh-t3code-sidebar — browser half.
  *
  * Replaces the `sidebar.workspaces` region (priority below the native
- * browser's default 0) with the task/project sidebar, keeps every ui-workspace
- * service, adds task actions to the native session menu, and mounts the
- * plugin's own Remote namespace. When the Host namespace is unavailable the
- * browser-only backend takes over and the UI says so.
+ * browser's default 0) with a task sidebar composed like the native workspace
+ * browser, keeps every ui-workspace service, adds task actions to the native
+ * session menu, puts its settings on this package's page under Plugins
+ * (`plugins.bundle.config`), and mounts the plugin's own Remote namespace.
+ * When the Host namespace is unavailable the browser-only backend takes over
+ * and the settings page says so.
  */
 import './styles.css'
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,10 +18,11 @@ import {
   ConnectAbortedError, connectHostBackend, HostConnectError, initialBackendState, LocalBackend,
   type BackendState, type CommandOutcome, type HostFailure, type RecoveryNotice, type TaskBackend,
 } from './backend.ts'
+import { SettingsPage } from './components/SettingsPage.tsx'
 import { TaskSidebar } from './components/Sidebar.tsx'
 import { en, NS, zh, type Key } from './locales.ts'
 import { buildRows, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot } from './model.ts'
-import { DEFAULT_PREFS, type Prefs, type Runtime } from './runtime.ts'
+import { DEFAULT_PREFS, migratePrefs, type MenuTarget, type Prefs, type Runtime } from './runtime.ts'
 import { createStore, type Readable, type Store } from './store.ts'
 import { browserObservedWakes, WakeDispatcher } from './wakes.ts'
 
@@ -28,6 +31,8 @@ export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'contex
 /** Below the native browser (0); configurable through `localStorage` for slot conflicts. */
 const SLOT_PRIORITY = -10
 const PREFS_KEY = 't3-sidebar:v1:prefs'
+/** npm package name: keys this plugin's page under Plugins. */
+const PACKAGE_NAME = 'dsh-t3code-sidebar'
 /** Backoff for reconnecting to the Host after a transient connection failure. */
 const connectRetryDelay = (attempt: number): number => Math.min(30_000, 1000 * 2 ** attempt)
 
@@ -37,7 +42,7 @@ interface ClientCtx {
     inject(key: string, callback: () => unknown): () => void
     register(options: Record<string, unknown>, component: unknown): () => void
   }
-  sessions: { list: Readable<SessionsSnapshot>; searchResultLimit: number; search(query: string, signal: AbortSignal): Promise<{ ok: boolean; value?: { items: { sessionId: string }[]; hasMore: boolean } }> }
+  sessions: { list: Readable<SessionsSnapshot>; searchResultLimit: number; search(query: string, signal: AbortSignal): Promise<{ ok: boolean; value?: { items: { sessionId: string; snippet?: string }[]; hasMore: boolean } }> }
   workspaces: {
     list: Readable<WorkspacesSnapshot>
     create(input: { path: string }): Promise<unknown>
@@ -48,11 +53,16 @@ interface ClientCtx {
     openSession(id: string): void
     startSession(workspaceId?: string): void
     unarchiveSession(id: string): Promise<void>
+    pinSession(id: string): Promise<void>
+    unpinSession(id: string): Promise<void>
     pickDirectory(): Promise<string | null>
   }
   contextMenus: {
     open(target: { kind: 'session'; value: { sessionId: string; displayTitle: string } }, point: { x: number; y: number }): void
     register(contribution: Record<string, unknown>): () => void
+    /** The open menu's captured target (absent on hosts without it). */
+    active?: Readable<MenuTarget | null>
+    close?(): void
   }
   remote: { $mount(contribution: unknown): Promise<() => Promise<void> | void>; [key: string]: unknown }
   inject(deps: string[], callback: (scoped: ClientCtx) => void | (() => void)): () => void
@@ -69,7 +79,7 @@ function optional<T>(ctx: ClientCtx, name: string): T | undefined {
 function loadPrefs(): Prefs {
   try {
     const raw = globalThis.localStorage?.getItem(PREFS_KEY)
-    return raw ? { ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) } : DEFAULT_PREFS
+    return raw ? migratePrefs(JSON.parse(raw)) : DEFAULT_PREFS
   } catch {
     return DEFAULT_PREFS
   }
@@ -93,6 +103,7 @@ function rebind<T>(source: Readable<T>): Readable<T> {
 
 const EMPTY_STATUS: StatusSnapshot = new Map()
 const emptyStatus: Readable<StatusSnapshot> = { getSnapshot: () => EMPTY_STATUS, subscribe: () => () => {} }
+const noMenu: Readable<MenuTarget | null> = { getSnapshot: () => null, subscribe: () => () => {} }
 
 export function apply(rawCtx: Context): void {
   const ctx = rawCtx as unknown as ClientCtx
@@ -170,12 +181,20 @@ export function apply(rawCtx: Context): void {
     backend: backendState,
     prefs,
     locale: localeSource,
+    menuTarget: ctx.contextMenus.active === undefined ? noMenu : rebind(ctx.contextMenus.active),
     t,
     searchLimit: ctx.sessions.searchResultLimit,
     open: id => ctx.uiWorkspace.openSession(id),
     startSession: workspaceId => ctx.uiWorkspace.startSession(workspaceId),
     unarchive: (id) => { ctx.uiWorkspace.unarchiveSession(id).catch(() => notify(t('error.generic', { code: 'unarchive' }))) },
+    pin: (id) => { ctx.uiWorkspace.pinSession(id).catch(() => notify(t('error.generic', { code: 'pin' }))) },
+    unpin: (id) => { ctx.uiWorkspace.unpinSession(id).catch(() => notify(t('error.generic', { code: 'unpin' }))) },
     openSessionMenu: (sessionId, displayTitle, point) => ctx.contextMenus.open({ kind: 'session', value: { sessionId, displayTitle } }, point),
+    toggleSessionMenu: (sessionId, displayTitle, point) => {
+      const active = ctx.contextMenus.active?.getSnapshot()
+      if (active?.kind === 'session' && active.value['sessionId'] === sessionId && ctx.contextMenus.close !== undefined) ctx.contextMenus.close()
+      else ctx.contextMenus.open({ kind: 'session', value: { sessionId, displayTitle } }, point)
+    },
     command,
     setPolicy: async (days, keepFailures) => backend === null
       ? { ok: false, code: 'STORAGE_UNAVAILABLE', message: 'not connected', policy: backendState.getSnapshot().policy }
@@ -184,7 +203,7 @@ export function apply(rawCtx: Context): void {
     search: async (query, signal) => {
       const result = await ctx.sessions.search(query, signal)
       if (!result.ok || result.value === undefined) throw new Error('search failed')
-      return { ids: result.value.items.map(item => item.sessionId), hasMore: result.value.hasMore }
+      return { items: result.value.items.map(item => ({ sessionId: item.sessionId, snippet: item.snippet })), hasMore: result.value.hasMore }
     },
     createWorkspace: async (path) => { await ctx.workspaces.create({ path }) },
     renameWorkspace: async (workspaceId, title) => { await ctx.workspaces.rename(workspaceId, title) },
@@ -192,6 +211,11 @@ export function apply(rawCtx: Context): void {
     pickDirectory: async () => {
       try { return await ctx.uiWorkspace.pickDirectory() } catch { return null }
     },
+    settingsAction: () => {
+      const navigation = optional<{ openBundle(packageName: string): void }>(ctx, 'pluginNavigation')
+      return navigation === undefined ? undefined : () => { navigation.openBundle(PACKAGE_NAME) }
+    },
+    notify,
     snoozeRequest,
     notice,
   }
@@ -294,6 +318,13 @@ export function apply(rawCtx: Context): void {
     priority: SLOT_PRIORITY,
     inject: () => ({ runtime }),
   }, TaskSidebar))
+
+  // ── Settings: this package's page under Plugins (declared while that page is served) ──
+  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+    name: 'plugins.bundle.config',
+    key: PACKAGE_NAME,
+    inject: () => ({ runtime }),
+  }, SettingsPage))
 
   // ── Native session menu: task actions (also reachable from conversation headers) ──
   ctx.effect(() => ctx.contextMenus.register({

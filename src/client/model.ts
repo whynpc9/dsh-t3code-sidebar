@@ -1,7 +1,9 @@
 /**
  * Pure view model: joins native Harness snapshots (sessions, workspaces,
- * session status) with plugin task records into rows, sections and project
- * groups. Both views read the same rows, so a session is placed identically.
+ * session status) with plugin task records into rows, then arranges them for
+ * the three groupings (status sections, workspaces, one list), search results
+ * and the native "show more" watermark. Every grouping reads the same rows, so
+ * a session is placed identically everywhere.
  */
 import { derivePlacement, rowStatus, type RowStatus } from '../domain/placement.ts'
 import { comparatorFor, type SortInput } from '../domain/sort.ts'
@@ -37,6 +39,8 @@ export interface WorkspaceRow {
   readonly path: string
   readonly title: string
   readonly sessionIds: readonly string[]
+  /** Workspace creation time (epoch ms), shown on the group hover card. */
+  readonly createdAt?: number
 }
 
 export interface WorkspacesSnapshot {
@@ -56,8 +60,18 @@ export type StatusSnapshot = ReadonlyMap<string, SessionStatusEntry>
 
 export interface Row {
   readonly sessionId: string
+  /** Host display title (falls back to the session id when the session has no title). */
   readonly title: string
+  /** The session's own stored title, or empty: what the row shows, and what rename, copy and search act on. */
+  readonly storedTitle: string
+  /** No stored title: the row shows the localized "Untitled", as the native list does. */
   readonly untitled: boolean
+  /** The provisional blank session (shown as "New session"). */
+  readonly blank: boolean
+  /** List activity time (native "last updated"). */
+  readonly updatedAt: number
+  /** Session working directory, when the Host reports one. */
+  readonly cwd: string | null
   readonly workspaceId: string | null
   readonly workspaceTitle: string | null
   readonly placement: Placement | null
@@ -123,11 +137,15 @@ export function buildRows(inputs: ModelInputs): Row[] {
     }
     const native: NativeState = { pinned: pinned.has(id), archived: archived.has(id) }
     const workspace = owner.get(id)
-    const untitled = (session.title ?? '').trim() === '' && session.displayTitle === id
+    const untitled = (session.title ?? '').trim() === ''
     rows.push({
       sessionId: id,
       title: session.displayTitle,
+      storedTitle: (session.title ?? '').trim(),
       untitled,
+      blank: session.blank,
+      updatedAt: session.updatedAt,
+      cwd: session.cwd === undefined || session.cwd === '' ? null : session.cwd,
       workspaceId: workspace?.workspaceId ?? null,
       workspaceTitle: workspace?.title ?? null,
       placement: derivePlacement(facts, record, native, now),
@@ -153,109 +171,243 @@ function completionAware(status: RowStatus, entry: SessionStatusEntry | undefine
   return status
 }
 
-export interface Filter {
-  /** Workspace id, `ungrouped`, or null for all projects. */
-  readonly scope: string | null
-  readonly query: string
-  /** Extra ids matched by content search (request-local). */
-  readonly contentHits: ReadonlySet<string> | null
+/** Session-list grouping: semantic status sections (default), workspaces, or one list. */
+export type GroupBy = 'status' | 'workspace' | 'flat'
+/** Archived-row visibility, as the native view options name it. */
+export type ArchivedFilter = 'default' | 'show' | 'only'
+
+/** Whether one row is visible under the archived filter. */
+export function visibleUnder(row: Pick<Row, 'native'>, filter: ArchivedFilter): boolean {
+  if (filter === 'only') return row.native.archived
+  return filter === 'show' || !row.native.archived
 }
 
-export function matches(row: Row, filter: Filter): boolean {
-  if (filter.scope === 'ungrouped' ? row.workspaceId !== null : filter.scope !== null && row.workspaceId !== filter.scope) {
-    return false
-  }
-  const query = filter.query.trim().toLowerCase()
-  if (query === '') return true
-  if (row.title.toLowerCase().includes(query)) return true
-  if ((row.workspaceTitle ?? '').toLowerCase().includes(query)) return true
-  return filter.contentHits?.has(row.sessionId) ?? false
-}
+/** Status-grouping section keys: the five placements plus the archived bucket. */
+export type SectionKey = Placement | 'archived'
 
 export interface Section {
-  readonly placement: Placement
+  readonly key: SectionKey
   readonly rows: readonly Row[]
 }
 
-/** Five task sections, each sorted by its own rule. */
-export function taskSections(rows: readonly Row[], filter: Filter): Section[] {
-  const buckets = new Map<Placement, Row[]>(PLACEMENTS.map(placement => [placement, []]))
+const byRecency = (left: Row, right: Row): number =>
+  (right.updatedAt - left.updatedAt) || (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)
+
+/**
+ * Status sections in display order, each sorted by its own rule. Empty
+ * sections are omitted: the sidebar shows only sections that hold a row.
+ */
+export function statusSections(rows: readonly Row[], filter: ArchivedFilter): Section[] {
+  const buckets = new Map<SectionKey, Row[]>([...PLACEMENTS, 'archived' as const].map(key => [key, []]))
   for (const row of rows) {
-    if (row.placement === null || !matches(row, filter)) continue
-    buckets.get(row.placement)!.push(row)
+    if (!visibleUnder(row, filter)) continue
+    const key: SectionKey | null = row.native.archived ? 'archived' : row.placement
+    if (key !== null) buckets.get(key)!.push(row)
   }
-  return PLACEMENTS.map((placement) => {
+  const sections: Section[] = []
+  for (const placement of PLACEMENTS) {
     const compare = comparatorFor(placement)
-    const sorted = [...buckets.get(placement)!].sort((left, right) => compare(left.sort, right.sort))
-    return { placement, rows: sorted }
-  })
+    // The current blank "New session" row leads its section, as in the native list.
+    const sorted = [...buckets.get(placement)!].sort((left, right) =>
+      (left.blank !== right.blank ? (left.blank ? -1 : 1) : 0) || compare(left.sort, right.sort))
+    if (sorted.length > 0) sections.push({ key: placement, rows: sorted })
+  }
+  const archived = [...buckets.get('archived')!].sort(byRecency)
+  if (archived.length > 0) sections.push({ key: 'archived', rows: archived })
+  return sections
 }
 
-/** Whether the current session has a section but the active scope/search hides it. */
-export function currentHiddenByFilter(current: Row | undefined, filter: Filter): boolean {
-  return current !== undefined && current.placement !== null && !matches(current, filter)
+/**
+ * Native list order: pinned rows lead in pin order, then the current blank
+ * "New session" row, then the rest by last update.
+ */
+export function listOrder(left: Row, right: Row): number {
+  const leftPinned = left.native.pinned && !left.native.archived
+  const rightPinned = right.native.pinned && !right.native.archived
+  if (leftPinned !== rightPinned) return leftPinned ? -1 : 1
+  if (leftPinned) return (left.sort.pinIndex - right.sort.pinIndex) || byRecency(left, right)
+  if (left.blank !== right.blank) return left.blank ? -1 : 1
+  return byRecency(left, right)
 }
 
-export function archivedRows(rows: readonly Row[], filter: Filter): Row[] {
-  return rows.filter(row => row.native.archived && matches(row, filter))
-}
-
-export interface ProjectGroup {
+export interface WorkspaceGroup {
+  /** Group key: the workspace id, or {@link UNGROUPED} for sessions outside every workspace. */
+  readonly key: string
   readonly workspaceId: string | null
   readonly title: string
   readonly path: string | null
-  /** Pinned, attention, working, then other active rows. */
-  readonly primary: readonly Row[]
-  /** Snoozed and settled rows, shown in a collapsed sub-group. */
-  readonly later: readonly Row[]
+  readonly createdAt: number | null
+  readonly rows: readonly Row[]
+  readonly containsCurrent: boolean
+}
+
+/** Group key of the bucket for sessions outside every workspace. */
+export const UNGROUPED = ''
+
+/**
+ * Workspace groups in Host order plus a trailing Ungrouped group. Empty
+ * workspaces stay (they can start a session) except in the archived-only
+ * view, which lists only groups that hold an archived row; Ungrouped shows
+ * only when it holds a row.
+ */
+export function workspaceGroups(
+  rows: readonly Row[], workspaces: WorkspacesSnapshot, filter: ArchivedFilter, ungroupedTitle: string,
+): WorkspaceGroup[] {
+  const byWorkspace = new Map<string, Row[]>()
+  for (const row of rows) {
+    if (!visibleUnder(row, filter)) continue
+    const key = row.workspaceId ?? UNGROUPED
+    if (!byWorkspace.has(key)) byWorkspace.set(key, [])
+    byWorkspace.get(key)!.push(row)
+  }
+  const group = (key: string, workspace: WorkspaceRow | null): WorkspaceGroup => {
+    const members = [...(byWorkspace.get(key) ?? [])].sort(listOrder)
+    return {
+      key,
+      workspaceId: workspace?.workspaceId ?? null,
+      title: workspace?.title ?? ungroupedTitle,
+      path: workspace?.path ?? null,
+      createdAt: workspace?.createdAt ?? null,
+      rows: members,
+      containsCurrent: members.some(row => row.current),
+    }
+  }
+  const groups = workspaces.items.map(workspace => group(workspace.workspaceId, workspace))
+    .filter(candidate => filter !== 'only' || candidate.rows.length > 0)
+  const ungrouped = group(UNGROUPED, null)
+  if (ungrouped.rows.length > 0) groups.push(ungrouped)
+  return groups
+}
+
+/** Every visible session in one list, in native list order. */
+export function flatRows(rows: readonly Row[], filter: ArchivedFilter): Row[] {
+  return rows.filter(row => visibleUnder(row, filter)).sort(listOrder)
 }
 
 /** Statuses that count as an attention event (approval, question, failure, new result). */
 const ATTENTION: ReadonlySet<RowStatus> = new Set<RowStatus>(['approval', 'input', 'attention', 'failed', 'new-result', 'needs-check'])
 
-/** Project-view rank: pinned → Active needing attention → Working → other Active → Snoozed → Settled. */
-export function projectRank(row: Pick<Row, 'placement' | 'status'>): number {
-  switch (row.placement) {
-    case 'pinned': return 0
-    case 'active': return ATTENTION.has(row.status) ? 1 : 3
-    case 'working': return 2
-    case 'snoozed': return 4
-    default: return 5
+/** Rows a collapsed list must keep in view: live work, an ask, a new result, or the current session. */
+export function wantsAttention(row: Pick<Row, 'status' | 'current'>): boolean {
+  return row.current || row.status === 'running' || ATTENTION.has(row.status)
+}
+
+/** Non-blank rows a group shows before "Show more" (native watermark). */
+export const WATERMARK_BASE = 5
+/** Highest watermark attention rows raise automatically. */
+export const WATERMARK_AUTO_MAX = 50
+
+/** The blank row plus the first `watermark` non-blank rows, in list order. */
+export function watermarkRows(rows: readonly Row[], watermark: number): { rows: readonly Row[]; hiddenCount: number } {
+  let count = 0
+  const shown = rows.filter((row) => {
+    if (row.blank) return true
+    count += 1
+    return count <= watermark
+  })
+  return { rows: shown, hiddenCount: rows.length - shown.length }
+}
+
+/** Smallest watermark (at least the base) covering every attention row within the automatic maximum. */
+export function requiredWatermark(rows: readonly Row[]): number {
+  let index = 0
+  let required = WATERMARK_BASE
+  for (const row of rows) {
+    if (row.blank) continue
+    index += 1
+    if (index <= WATERMARK_AUTO_MAX && wantsAttention(row)) required = Math.max(required, index)
+  }
+  return required
+}
+
+/** `session.search` wire bound, measured in JavaScript UTF-16 code units. */
+export const SEARCH_QUERY_MAX = 500
+
+/** Keep a query inside the `session.search` contract: no NUL, at most 500 code units, no split surrogate pair. */
+export function sanitizeQuery(value: string): string {
+  const withoutNul = value.replaceAll('\0', '')
+  if (withoutNul.length <= SEARCH_QUERY_MAX) return withoutNul
+  let end = SEARCH_QUERY_MAX
+  const last = withoutNul.charCodeAt(end - 1)
+  const next = withoutNul.charCodeAt(end)
+  if (last >= 0xD800 && last <= 0xDBFF && next >= 0xDC00 && next <= 0xDFFF) end--
+  return withoutNul.slice(0, end)
+}
+
+export interface ContentHit {
+  readonly sessionId: string
+  readonly snippet?: string | undefined
+}
+
+export interface SearchResult {
+  readonly row: Row
+  readonly snippet: string | null
+  /** Where the session lives: its workspace title, else its directory's name; empty means Ungrouped. */
+  readonly place: string
+}
+
+/**
+ * A session's place as the native search labels it: the owning workspace's
+ * title, else the basename of its working directory (the raw path when it
+ * has none), else empty for Ungrouped.
+ */
+export function placeOf(row: Pick<Row, 'workspaceTitle' | 'cwd'>): string {
+  if (row.workspaceTitle !== null) return row.workspaceTitle
+  if (row.cwd === null || row.cwd === '') return ''
+  const base = row.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+  return base !== '' ? base : row.cwd
+}
+
+export interface SearchResultSet {
+  readonly items: readonly SearchResult[]
+  /** More sessions matched than `limit` allows (local and content matches combined). */
+  readonly truncated: boolean
+}
+
+/**
+ * Search results: local title / workspace / id matches by recency, then the
+ * Host's content matches in their order, each session once, capped at `limit`.
+ * Blank sessions never match; results follow the archived filter.
+ */
+export function searchResults(
+  rows: readonly Row[], query: string, content: readonly ContentHit[], filter: ArchivedFilter, limit: number,
+): SearchResultSet {
+  const q = query.trim().toLowerCase()
+  if (q === '') return { items: [], truncated: false }
+  const eligible = rows.filter(row => !row.blank && visibleUnder(row, filter))
+  const byId = new Map(eligible.map(row => [row.sessionId, row]))
+  const snippets = new Map<string, string>()
+  for (const hit of content) if (hit.snippet !== undefined && !snippets.has(hit.sessionId)) snippets.set(hit.sessionId, hit.snippet)
+  const ordered: Row[] = []
+  const seen = new Set<string>()
+  const include = (row: Row | undefined) => {
+    if (row === undefined || seen.has(row.sessionId)) return
+    seen.add(row.sessionId)
+    ordered.push(row)
+  }
+  // As in the native search, an unnamed session does not match by the host's directory-name fallback.
+  const local = eligible.filter(row => row.storedTitle.toLowerCase().includes(q)
+    || placeOf(row).toLowerCase().includes(q)
+    || row.sessionId.toLowerCase().includes(q)).sort(byRecency)
+  for (const row of local) include(row)
+  for (const hit of content) include(byId.get(hit.sessionId))
+  return {
+    items: ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null, place: placeOf(row) })),
+    truncated: ordered.length > limit,
   }
 }
 
-/** Workspace groups in Host order, plus an Ungrouped group. */
-export function projectGroups(rows: readonly Row[], workspaces: WorkspacesSnapshot, filter: Filter, ungroupedTitle: string): ProjectGroup[] {
-  const byWorkspace = new Map<string | null, Row[]>()
-  for (const row of rows) {
-    if (row.placement === null || !matches(row, filter)) continue
-    const key = row.workspaceId
-    if (!byWorkspace.has(key)) byWorkspace.set(key, [])
-    byWorkspace.get(key)!.push(row)
+/** Keys that move focus between list rows (the arrow keys and Home / End). */
+export type ListKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End'
+
+/** Index of the row a list-navigation key moves focus to, or null for any other key. */
+export function nextFocusIndex(key: string, index: number, count: number): number | null {
+  if (count === 0) return null
+  switch (key) {
+    case 'ArrowDown': return Math.min(count - 1, index + 1)
+    case 'ArrowUp': return Math.max(0, index - 1)
+    case 'Home': return 0
+    case 'End': return count - 1
+    default: return null
   }
-  const order = (left: Row, right: Row): number =>
-    (projectRank(left) - projectRank(right)) || comparatorFor(left.placement!)(left.sort, right.sort)
-  const group = (workspaceId: string | null, title: string, path: string | null): ProjectGroup => {
-    const all = [...(byWorkspace.get(workspaceId) ?? [])].sort(order)
-    return {
-      workspaceId,
-      title,
-      path,
-      primary: all.filter(row => row.placement !== 'snoozed' && row.placement !== 'settled'),
-      later: all.filter(row => row.placement === 'snoozed' || row.placement === 'settled'),
-    }
-  }
-  const groups: ProjectGroup[] = []
-  for (const workspace of workspaces.items) {
-    if (filter.scope !== null && filter.scope !== workspace.workspaceId) continue
-    const g = group(workspace.workspaceId, workspace.title, workspace.path)
-    // Empty projects stay visible (they can start a session) unless a search is active.
-    if (filter.query.trim() !== '' && g.primary.length + g.later.length === 0) continue
-    groups.push(g)
-  }
-  if (filter.scope === null || filter.scope === 'ungrouped') {
-    const ungrouped = group(null, ungroupedTitle, null)
-    if (ungrouped.primary.length + ungrouped.later.length > 0) groups.push(ungrouped)
-  }
-  return groups
 }

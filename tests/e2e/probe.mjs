@@ -15,7 +15,8 @@ const info = await page.evaluate(() => {
   return {
     view: root?.getAttribute('data-t3-sidebar') ?? null,
     backend: root?.getAttribute('data-backend') ?? null,
-    sections: [...document.querySelectorAll('[data-section]')].map(s => s.getAttribute('data-section') + ':' + (s.querySelector('.t3sb-count')?.textContent ?? '')),
+    sections: [...document.querySelectorAll('[data-section]')].map(s => s.getAttribute('data-section') + ':' + s.querySelectorAll('[data-session-id]').length),
+    header: document.querySelector('.t3sb-section-header')?.textContent ?? null,
     nativeBrowser: document.querySelectorAll('[class*="bhn1Oq_root"]').length,
   }
 })
