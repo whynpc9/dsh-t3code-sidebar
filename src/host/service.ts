@@ -154,6 +154,14 @@ export class T3SidebarService extends TypertRemoteService {
   private readonly startedAt = Date.now()
   /** Sessions whose stored log was replayed into the summary by this process (latest result known). */
   private readonly historyFolded = new Set<string>()
+  /**
+   * Sessions whose summary is known to miss an event (a live fold could not be
+   * persisted). Only a successful replay clears this; catch-up resetting the
+   * grace window does not recover the event.
+   */
+  private readonly historyInvalid = new Set<string>()
+  /** Invalidation count per session: a replay only vouches for history if none happened while it read. */
+  private readonly historyInvalidations = new Map<string, number>()
   /** History rebuilds waiting or running, and failed ones with their retry instant. */
   private readonly historyQueue = new Set<string>()
   private readonly historyRetry = new Map<string, { readonly failures: number; readonly at: number }>()
@@ -678,7 +686,7 @@ export class T3SidebarService extends TypertRemoteService {
    * persisted makes it unknown again.
    */
   private resultHistoryKnown(sessionId: string): boolean {
-    if (this.failedFolds.has(sessionId)) return false
+    if (this.failedFolds.has(sessionId) || this.historyInvalid.has(sessionId)) return false
     if (this.historyFolded.has(sessionId)) return true
     const header = this.headers.get(sessionId)
     return header !== undefined && header.createdAt >= this.startedAt
@@ -698,15 +706,14 @@ export class T3SidebarService extends TypertRemoteService {
     this.historyRebuild ??= (async () => {
       while (this.historyQueue.size > 0 && !this.disposed) {
         const batch = [...this.historyQueue].slice(0, ACTIVITY_CONCURRENCY)
-        await Promise.all(batch.map(async (sessionId) => {
-          await this.rebuildOne(sessionId)
-          this.historyQueue.delete(sessionId)
-        }))
+        for (const sessionId of batch) this.historyQueue.delete(sessionId)
+        await Promise.all(batch.map(sessionId => this.rebuildOne(sessionId)))
       }
     })().catch(() => undefined).finally(() => { this.historyRebuild = undefined })
   }
 
   private async rebuildOne(sessionId: string): Promise<void> {
+    const invalidations = this.historyInvalidations.get(sessionId) ?? 0
     const events = await this.replayFoldable(sessionId)
     if (this.disposed) return
     const committed = events !== null && await this.queue.run(async () => {
@@ -718,8 +725,12 @@ export class T3SidebarService extends TypertRemoteService {
       }
       return true
     }).catch(() => false)
-    if (committed) {
+    if (committed && (this.historyInvalidations.get(sessionId) ?? 0) !== invalidations) {
+      // A fold failed while the log was being read: that event may be missing; replay again.
+      this.historyQueue.add(sessionId)
+    } else if (committed) {
       this.historyFolded.add(sessionId)
+      this.historyInvalid.delete(sessionId)
       this.historyRetry.delete(sessionId)
     } else {
       const failures = (this.historyRetry.get(sessionId)?.failures ?? 0) + 1
@@ -1042,6 +1053,9 @@ export class T3SidebarService extends TypertRemoteService {
         // The fold is lost; let catch-up recover it conservatively instead of
         // acknowledging this session's new persistence token.
         this.failedFolds.add(sessionId)
+        this.historyInvalid.add(sessionId)
+        this.historyFolded.delete(sessionId)
+        this.historyInvalidations.set(sessionId, (this.historyInvalidations.get(sessionId) ?? 0) + 1)
       }
     })
   }
@@ -1108,8 +1122,10 @@ export class T3SidebarService extends TypertRemoteService {
         const workspaceId = membership?.get(header.id) ?? null
         const record = this.withGrace(this.recordOf(header.id, now), graced, workspaceId)
         if (record.disposition.kind !== 'normal') continue
+        // Time and scope only: result protections are judged after the
+        // candidate's latest result is known (a cached one may be superseded).
         const timeOnly = decideAutoSettle({
-          policy,
+          policy: { ...policy, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false },
           workspaceId,
           scopeKnown,
           record,

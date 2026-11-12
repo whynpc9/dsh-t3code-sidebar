@@ -280,3 +280,48 @@ describe('previewPolicy', () => {
     expect(() => service.previewPolicy({ protocolVersion: 2, draft: null })).toThrow(/protocol/)
   })
 })
+
+describe('history knowledge for keep protections (review follow-ups)', () => {
+  const internal = (service: T3SidebarService) => service as unknown as {
+    rebuildHistory(ids: string[]): void
+    historyRebuild: Promise<void> | undefined
+    resultHistoryKnown(id: string): boolean
+    failedFolds: Set<string>
+  }
+
+  it('rebuilds history even when the cached summary already holds an older failure', async () => {
+    const { service, host, sweep, settled, setPolicy, emit } = await boot()
+    const old = Date.now() - 20 * DAY
+    // The Host saw an old failure live (in an earlier run)…
+    emit('s1', 'turn/end', 2, { reason: { kind: 'error' } }, old)
+    await settleTick()
+    // …and a later success happened while it was not running (only in the stored log).
+    appendStored(host, 's1', 'turn/start', {}, old)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'error' } }, old)
+    appendStored(host, 's1', 'turn/start', {}, old + 1000)
+    appendStored(host, 's1', 'turn/end', { reason: { kind: 'completed' } }, old + 2000)
+    await setPolicy({ keepUnacknowledgedFailures: true })
+    await sweep()
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.autoSettleSkip).toBe('result-unknown')
+    await internal(service).historyRebuild
+    await sweep()
+    expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')?.record.activity.lastTurnEnd).toMatchObject({ seq: 3, reason: 'completed' })
+    expect(settled()).toEqual(['s1', 's2'])
+  })
+
+  it('keeps a failed live fold unknown after catch-up clears it, until a replay succeeds', async () => {
+    const { service, storage, emit, rebuild } = await boot()
+    // A session created by this process would be known by its creation time…
+    const fresh = internal(service)
+    storage.failTableWrites = true
+    emit('s1', 'turn/end', 2, { reason: { kind: 'error' } }, Date.now())
+    await settleTick()
+    storage.failTableWrites = false
+    expect(fresh.resultHistoryKnown('s1')).toBe(false)
+    // Catch-up forgets the failed fold after resetting the grace window; history stays unknown.
+    fresh.failedFolds.delete('s1')
+    expect(fresh.resultHistoryKnown('s1')).toBe(false)
+    await rebuild('s1')
+    expect(fresh.resultHistoryKnown('s1')).toBe(true)
+  })
+})

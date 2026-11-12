@@ -96,13 +96,14 @@ export function decideAutoSettle(input: {
   if (facts.activity.value.length > 0) return skip('active-work')
   if (!facts.pending.known) return skip('pending-unknown')
   if (facts.pending.value.length > 0) return skip('pending')
-  const held = heldResult(policy, facts.summary, record.resultAcknowledgedSeq)
-  if (held !== null) return skip(held)
-  // A keep protection can only be judged against the latest result; one that
-  // may be missing from the summary (not replayed yet) is never assumed absent.
+  // A keep protection can only be judged against the latest result. While the
+  // summary may miss it (not replayed yet), neither its absence nor a result
+  // already in the summary (possibly superseded) decides anything.
   if ((policy.keepUnacknowledgedFailures || policy.keepUnacknowledgedResults) && facts.resultHistoryKnown === false) {
     return skip('result-unknown')
   }
+  const held = heldResult(policy, facts.summary, record.resultAcknowledgedSeq)
+  if (held !== null) return skip(held)
   if (!(now > deadline)) return skip('not-due')
   return { eligible: true, skip: null, anchorAt, deadline, days, source: effective.source }
 }
