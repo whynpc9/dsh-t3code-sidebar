@@ -4,7 +4,7 @@
  * - `HostBackend`: the `t3Sidebar` Remote namespace (baseline + ordered deltas,
  *   revision-checked idempotent commands). Shared by all owner windows.
  * - `LocalBackend`: browser-only preview used when the Host namespace is
- *   missing, incompatible or refuses this window (decision Q1). Same domain
+ *   missing or incompatible (decision Q1). Same domain
  *   transitions, stored in localStorage and synchronized across tabs of this
  *   browser with BroadcastChannel. Snoozes only return while a tab is open;
  *   automatic settling is unavailable.
@@ -121,6 +121,10 @@ export const initialBackendState: BackendState = {
   failure: null,
 }
 
+export const forbiddenBackendState: BackendState = {
+  ...initialBackendState, failure: 'forbidden',
+}
+
 const newCommandId = (): string => globalThis.crypto.randomUUID()
 
 // ── Host backend ─────────────────────────────────────────────────────────────
@@ -152,6 +156,8 @@ export interface HostBackendOptions {
   readonly onConnectionReset: (listener: () => void) => () => void
   /** Results of operations whose replies were lost. */
   readonly onRecovery?: (notice: RecoveryNotice) => void
+  /** An established connection was explicitly refused. Discard this backend. */
+  readonly onForbidden?: () => void
   /** Delay before resubscribing after `attempt` consecutive failures (tests shorten it). */
   readonly retryDelay?: (attempt: number) => number
   readonly mountTimeoutMs?: number
@@ -182,11 +188,12 @@ export class ConnectAbortedError extends Error {
 export function classifyRemoteFailure(error: RemoteFailureLike | undefined): HostFailure {
   const code = error?.code ?? ''
   if (code === PROTOCOL_MISMATCH_CODE || code === 'gateway/bad-request') return 'incompatible'
-  if (/forbidden|unauthori[sz]ed|denied|permission|principal/i.test(code)) return 'forbidden'
-  if (/not-found|unknown-(method|namespace|service)|no-such/i.test(code)) return 'missing'
   const status = Number(/\bHTTP (\d{3})\b/.exec(error?.message ?? '')?.[1] ?? 0)
+  if (status === 401 || status === 403 || code === 'gateway/peer-disposed'
+    || /forbidden|(?:un|not-)authori[sz]ed|denied|permission|principal/i.test(code)
+    || /^(?:liveshare\/)?(?:share-(?:stopped|expired|not-found)|read-only|read-refused)$/.test(code)) return 'forbidden'
+  if (/not-found|unknown-(method|namespace|service)|no-such|(?:method|service|definition)-unavailable/i.test(code)) return 'missing'
   if (status === 404 || status === 405 || status === 501) return 'missing'
-  if (status === 401 || status === 403) return 'forbidden'
   if (status >= 400 && status < 500 && status !== 408 && status !== 429) return 'incompatible'
   return 'transient'
 }
@@ -338,6 +345,7 @@ export class HostBackend implements TaskBackend {
   private readonly stopReset: () => void
   private readonly retryDelay: (attempt: number) => number
   private readonly onRecovery: (notice: RecoveryNotice) => void
+  private readonly onForbidden: () => void
   /** Commands whose replies were lost, keyed by commandId; resent with the same id after a baseline. */
   private readonly unconfirmed = new Map<string, PendingCommand>()
   private unconfirmedPolicy: PendingPolicy | null = null
@@ -353,6 +361,7 @@ export class HostBackend implements TaskBackend {
     this.streamSeq = baseline.streamSeq
     this.retryDelay = options.retryDelay ?? defaultRetryDelay
     this.onRecovery = options.onRecovery ?? (() => {})
+    this.onForbidden = options.onForbidden ?? (() => {})
     this.state = createStore<BackendState>(this.fromSnapshot(baseline))
     this.stopReset = options.onConnectionReset(() => { this.invalidate(true) })
     this.consume(this.generation)
@@ -377,6 +386,13 @@ export class HostBackend implements TaskBackend {
 
   private isReady(): boolean {
     return !this.disposed && this.baselineGeneration === this.generation && this.state.getSnapshot().status === 'ready'
+  }
+
+  private checkForbidden(generation: number, error: RemoteFailureLike | undefined): void {
+    if (!this.isCurrent(generation) || classifyRemoteFailure(error) !== 'forbidden') return
+    this.dispose()
+    this.state.set(forbiddenBackendState)
+    this.onForbidden()
   }
 
   /**
@@ -428,8 +444,9 @@ export class HostBackend implements TaskBackend {
           if (!this.isCurrent(generation)) return
           this.apply(generation, event)
         }
-      } catch {
-        // Stream ended by a disconnect or a Host restart; a fresh subscription follows.
+      } catch (error) {
+        this.checkForbidden(generation, error as RemoteFailureLike)
+        // A transient stream failure still triggers a fresh subscription.
       }
       if (this.isCurrent(generation)) this.invalidate(false)
     })()
@@ -526,6 +543,7 @@ export class HostBackend implements TaskBackend {
       if (refused !== null) {
         // Rejected before dispatch: certainly not applied.
         this.unconfirmed.delete(pending.input.commandId)
+        if (refused === 'FORBIDDEN') this.checkForbidden(generation, result.error)
         return { ok: false, code: refused, message: describeFailure(result.error), task: null }
       }
       // Lost reply: the command may have been committed. Keep it for recovery
@@ -537,6 +555,7 @@ export class HostBackend implements TaskBackend {
       return { ok: false, code: 'UNCONFIRMED', message, task: null }
     }
     this.unconfirmed.delete(pending.input.commandId)
+    if (this.disposed) return { ok: false, code: 'BASELINE_PENDING', message: 'task backend was closed', task: null }
     if (result.value.task !== null && this.isCurrent(generation)) this.merge(result.value.task)
     return result.value
   }
@@ -593,20 +612,21 @@ export class HostBackend implements TaskBackend {
     } finally {
       pending.inFlight = false
     }
-    const latest = this.state.getSnapshot().policy
     if (!result.ok || result.value === undefined) {
       const refused = refusalCode(result.error)
       if (refused !== null) {
         if (this.unconfirmedPolicy === pending) this.unconfirmedPolicy = null
-        return { ok: false, code: refused, message: describeFailure(result.error), policy: latest }
+        if (refused === 'FORBIDDEN') this.checkForbidden(generation, result.error)
+        return { ok: false, code: refused, message: describeFailure(result.error), policy: this.state.getSnapshot().policy }
       }
       const message = `result unknown: ${describeFailure(result.error)}`
-      if (this.disposed) return { ok: false, code: 'UNCONFIRMED', message, policy: latest }
+      if (this.disposed) return { ok: false, code: 'UNCONFIRMED', message, policy: DEFAULT_POLICY }
       // Only the most recent lost write is recovered (an older one's CAS would fail anyway).
       this.unconfirmedPolicy = pending
       this.afterLostReply(generation)
-      return { ok: false, code: 'UNCONFIRMED', message, policy: latest }
+      return { ok: false, code: 'UNCONFIRMED', message, policy: this.state.getSnapshot().policy }
     }
+    if (this.disposed) return { ok: false, code: 'BASELINE_PENDING', message: 'task backend was closed', policy: DEFAULT_POLICY }
     if (this.unconfirmedPolicy === pending) this.unconfirmedPolicy = null
     if (this.isCurrent(generation)) {
       const state = this.state.getSnapshot()
@@ -660,20 +680,26 @@ export class HostBackend implements TaskBackend {
   async previewPolicy(draft: PolicyDraft | null): Promise<PolicyPreview | null> {
     const api = this.api
     if (api?.previewPolicy === undefined || !this.isReady()) return null
+    const generation = this.generation
     try {
       const result = await api.previewPolicy({ protocolVersion: PROTOCOL_VERSION, draft })
-      return result.ok && result.value !== undefined ? result.value : null
-    } catch {
+      if (!result.ok) this.checkForbidden(generation, result.error)
+      return this.isCurrent(generation) && result.ok ? result.value ?? null : null
+    } catch (error) {
+      this.checkForbidden(generation, error as RemoteFailureLike)
       return null
     }
   }
 
   async listTransitions(limit: number) {
-    if (this.api === null) return []
+    if (this.api === null || !this.isReady()) return []
+    const generation = this.generation
     try {
       const result = await this.api.listTransitions(limit)
-      return result.ok && result.value !== undefined ? result.value : []
-    } catch {
+      if (!result.ok) this.checkForbidden(generation, result.error)
+      return this.isCurrent(generation) && result.ok ? result.value ?? [] : []
+    } catch (error) {
+      this.checkForbidden(generation, error as RemoteFailureLike)
       return []
     }
   }

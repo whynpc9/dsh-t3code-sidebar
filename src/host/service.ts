@@ -19,7 +19,7 @@ import {
   type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type HeldResult, type PolicyPreview, type PolicyResult,
   type Snapshot, type TaskView, type TransitionEntry,
 } from '../contracts/schema.ts'
-import { NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
+import { ACCESS_DENIED_CODE, NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
   acknowledgeResult, autoSettle, foldActivity, mergeHistory, reconcile, releaseHeldAutoSettle, reopen, setPolicyOverride, settle, snooze,
@@ -256,7 +256,14 @@ export class T3SidebarService extends TypertRemoteService {
   @Remote({ name: 'follow', mode: 'stream' })
   follow(t3ProtocolVersion: number, signal: AbortSignal): AsyncIterable<FollowEvent> {
     this.assertProtocol(t3ProtocolVersion)
-    return this.openFollow(signal)
+    // Gateway checks the opening call. A non-owner's grants can change while
+    // the stream is open, so check again before sending each frame.
+    const invocation = this.ctx.invocation
+    const allowsFrame = invocation === undefined || invocation.peer.principal.kind === 'owner'
+      ? () => true
+      : () => optionalService<{ allows(resource: { kind: 'global' }): boolean }>(this.ctx, 'remoteAccess')
+        ?.allows({ kind: 'global' }) === true
+    return this.openFollow(signal, allowsFrame)
   }
 
   @Remote('command')
@@ -1302,7 +1309,7 @@ export class T3SidebarService extends TypertRemoteService {
     for (const follower of this.followers) follower.push(event)
   }
 
-  private openFollow(signal: AbortSignal): AsyncIterable<FollowEvent> {
+  private openFollow(signal: AbortSignal, allowsFrame: () => boolean): AsyncIterable<FollowEvent> {
     const buffer: FollowEvent[] = []
     let wake: (() => void) | undefined
     let closed: Error | null | undefined
@@ -1327,7 +1334,13 @@ export class T3SidebarService extends TypertRemoteService {
         next: async (): Promise<IteratorResult<FollowEvent>> => {
           for (;;) {
             const event = buffer.shift()
-            if (event !== undefined) return { done: false, value: event }
+            if (event !== undefined) {
+              if (!allowsFrame()) {
+                follower.close()
+                throw new RemoteError(ACCESS_DENIED_CODE, 'task stream access ended', {})
+              }
+              return { done: false, value: event }
+            }
             if (closed !== undefined) {
               if (closed !== null) throw closed
               return { done: true, value: undefined }

@@ -15,7 +15,7 @@ import type { Snapshot } from '../../src/contracts/schema.ts'
 import type { Runtime } from '../../src/client/runtime.ts'
 import { createStore, type Readable } from '../../src/client/store.ts'
 import { EMPTY_ACTIVITY, emptyRecord } from '../../src/domain/types.ts'
-import { baseline, deferred, FakeRemote, flush, POLICY, snapshot } from './remote-fakes.ts'
+import { baseline, deferred, FakeRemote, flush, POLICY, snapshot, taskView } from './remote-fakes.ts'
 
 const NAMESPACE = 't3Sidebar'
 
@@ -59,6 +59,7 @@ interface Env {
   sessions: ReturnType<typeof counted<{ byId: Record<string, unknown>; items: unknown[] }>>
   workspaces: ReturnType<typeof counted<{ items: unknown[]; pinnedSessionIds: string[]; archivedSessionIds: string[] }>>
   locale: ReturnType<typeof counted<string>>
+  access: ReturnType<typeof counted<boolean>>
   replaceNamespace(api: FakeRemote): void
 }
 
@@ -73,6 +74,7 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
     sessions: counted({ byId: {}, items: [] }),
     workspaces: counted({ items: [], pinnedSessionIds: [], archivedSessionIds: [] }),
     locale: counted('en'),
+    access: counted(true),
   } as unknown as Env
 
   class Slots extends Service {
@@ -154,6 +156,18 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
     },
   })
   root.provide('remote', remote)
+  root.provide('remoteAccess', {
+    whenAccess(_action: string, start: () => () => void) {
+      let stop: (() => void) | undefined
+      const sync = () => {
+        if (env.access.getSnapshot()) stop ??= start()
+        else { stop?.(); stop = undefined }
+      }
+      const unsubscribe = env.access.subscribe(sync)
+      sync()
+      return () => { unsubscribe(); stop?.() }
+    },
+  })
   root.provide('locale', {
     getSnapshot: () => env.locale.getSnapshot(),
     subscribe: (listener: () => void) => env.locale.subscribe(listener),
@@ -209,6 +223,30 @@ function hostApi(reply?: () => Promise<RemoteResult<Snapshot>>): FakeRemote {
 }
 
 describe('client lifecycle on a real Cordis context', () => {
+  it('withdraws the task slot and discards metadata and captured actions when access is revoked', async () => {
+    const api = hostApi(async () => ({ ok: true, value: snapshot('e1', 0, [taskView('private', 1, 'settled')]) }))
+    const env = createEnv(() => api)
+    env.access.set(false)
+    const fiber = env.root.plugin(plugin)
+    await fiber
+    await settle()
+    expect(env.slots.size).toBe(0)
+    expect(env.mounts).toBe(0)
+    env.access.set(true)
+    await settle()
+    const runtime = [...env.slots][0]!.inject().runtime
+    expect(runtime.backend.getSnapshot().tasks.has('private')).toBe(true)
+
+    env.access.set(false)
+    await settle()
+    expect(runtime.backend.getSnapshot()).toMatchObject({ failure: 'forbidden', tasks: new Map() })
+    expect(footprint(env)).toMatchObject({ slots: 0, mounted: 0, openStreams: 0 })
+    expect(await runtime.command('private', { kind: 'reopen' })).toMatchObject({ ok: false, code: 'FORBIDDEN' })
+    expect(api.commands).toHaveLength(0)
+    await fiber.dispose()
+    expect(env.access.live).toBe(0)
+  })
+
   it('connects to the Host and releases everything on disable, 20 times', async () => {
     const env = createEnv(() => hostApi())
     for (let cycle = 0; cycle < 20; cycle++) {
@@ -391,6 +429,10 @@ describe('connectHostBackend failure paths', () => {
     ['t3Sidebar/protocol-mismatch', 'no', 'incompatible'],
     ['gateway/bad-request', 'no', 'incompatible'],
     ['gateway/forbidden', 'no', 'forbidden'],
+    ['gateway/peer-disposed', 'no', 'forbidden'],
+    ['remote-access/denied', 'no', 'forbidden'],
+    ['viewer-not-authorized', 'share access ended', 'forbidden'],
+    ['share-stopped', 'share access ended', 'forbidden'],
     ['gateway/not-found', 'no', 'missing'],
     ['gateway/internal', 'no', 'transient'],
     // Real dsh 0.2.2-rc.1 Web answers (Host half off → 404).

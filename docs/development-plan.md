@@ -43,7 +43,7 @@
 | U07 键盘/无障碍 | 部分 | 方向键/Home/End/左右折叠、Enter 打开有组件测试（A08）；⌘K/⌘O 失效已修复（消费原生注册注入的请求 store），Linux Web 实测通过，**Desktop 待复验**；读屏未验收 |
 | S01 设置与诊断 | 完成 | 设置在插件详情页：后端类型与回退原因、被其他插件遮蔽时点名胜出者（`ctx.slots.entries` 最低 priority）、审计记录 |
 | P01–P04 时间策略 | 完成（v0.1 范围） | Host 默认/Workspace 覆盖/会话豁免，分范围宽限；保留未确认结果/失败与共享“确认此结果”；`previewPolicy` 草稿预览；见[时间策略 Spec §0](time-policy-spec.md) |
-| Q01 | 进行中 | 230 项单元/服务/组件/集成测试；Linux Web 端到端：主场景 20、重启 1、新功能 14 |
+| Q01 | 进行中 | 237 项单元/服务/组件/集成测试；Linux Web 端到端已有主场景、重启和新功能证据；A10 另有真实 Gateway 与浏览器用例 |
 | Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
 | Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
 | R01 | 部分 | [CHANGELOG](../CHANGELOG.md)、[发行说明与支持矩阵](release.md)（门禁核对）已有；npm 包名可用性与正式发布未做 |
@@ -53,7 +53,7 @@ issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交�
 
 2026-11-12（`0.1.0-alpha.2`）：审批态端到端、A07/A08 自动化、Workspace 级策略（P01）、结果确认与预览（P04）、S01 诊断、C01 回写、⌘K/⌘O 修复、Linux Web 规模测量均已完成，见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。
 
-下一步顺序：macOS Desktop 复验 alpha.2（⌘K/⌘O、Workspace 策略、规模预算与 20 次启停，M6）→ A10 guest/权限撤回 → 读屏验收 → v0.1-preview 发布决定。
+2026-11-13（A10）：隔离 Web profile 验证真实 Gateway 的 guest 拒绝、撤权、未知写入字段和任务 API 关闭，见 [A10 验证记录](validation/a10/README.md)。v0.1-preview 继续补读屏、规模和生命周期证据。Desktop 的规模预算与 20 次启停仍属 M6。
 
 ## 1. 输入、交付物和工作方式
 

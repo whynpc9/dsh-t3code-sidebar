@@ -1,0 +1,12 @@
+{
+  "name": "dsh-t3code-access-gate-fixture",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Test-only Harness Gateway peer and revocation fixture",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js", "./package.json": "./package.json" },
+  "files": ["index.js", "cordis.patch.yml"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

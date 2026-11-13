@@ -272,17 +272,17 @@ Client 侧代次（generation，2026-11-11 落实，见 issue #4）：
 - 策略写入没有收据，且 baseline 快照不排在 Host 队列中尚未完成的写入之后，因此不能凭 baseline 判断“未生效”。恢复改为以**原 expectedRevision 重发**：重发经 Host 串行队列排在任何仍在处理的原请求之后，CAS 结果即权威——成功 → 已生效；`CONFLICT` 且返回值与请求一致 → 原请求已生效（与他人同值并发写无法区分，结果相同）；`CONFLICT` 且值不同 → 已被他处更改。只恢复最近一次丢失的策略写入，最多重试 5 次。
 - 明确在分派前被拒的请求（`gateway/bad-request`、协议不符、HTTP 4xx）确定未生效，直接返回对应错误码而非 `UNCONFIRMED`。
 
-Client 装配：一次 effect 运行拥有一条连接尝试链（AbortSignal 所有者）。Remote 挂载、嵌套 `inject` 作用域（cordis `Fiber`，以 `.dispose()` 释放）、后端、status 订阅、重试计时器都由同一 disposer 释放；失效后才完成的连接会被立即 dispose，迟到的失败不再创建本地后端或订阅。连接失败分类：`missing`（命名空间未出现，或 Web 传输 HTTP 404/405/501——0.2.2-rc.1 上 Host 半边关闭即为 404）、`incompatible`（协议不符 `t3Sidebar/protocol-mismatch`、`gateway/bad-request`、其他 4xx）、`forbidden`（401/403 或权限类错误码）回退浏览器本地预览并在设置中显示原因；`transient`（网络错误、5xx、其他 Gateway 内部错误）只退避重试 Host，不切换到本地预览，避免把任务状态分叉进浏览器。审计（transitions）与 `dataRevision` 是尽力而为的簿记：主记录提交后它们失败不回滚、不把操作报告为失败，审计因此可能有缺口；诊断以任务记录的 `receipts` 与 revision 为准。
+Client 装配：一次 effect 运行拥有一条连接尝试链（AbortSignal 所有者）。Remote 挂载、嵌套 `inject` 作用域（cordis `Fiber`，以 `.dispose()` 释放）、后端、status 订阅、重试计时器都由同一 disposer 释放；失效后才完成的连接会被立即 dispose，迟到的失败不再创建本地后端或订阅。`missing`（例如 Host 关闭时的 HTTP 404）和 `incompatible`（例如协议不符）在当前窗口仍有访问许可时进入浏览器本地预览。`forbidden`（401/403、Peer 已释放或明确权限拒绝）清空 Host 状态、关闭任务操作并恢复原生侧栏。`transient`（网络错误、5xx）退避重试 Host。审计（transitions）与 `dataRevision` 是尽力而为的簿记：主记录提交后它们失败不回滚、不把操作报告为失败，审计因此可能有缺口；诊断以任务记录的 `receipts` 与 revision 为准。
 
 订阅先安装再读取/发布初始快照；Host follow 在统一队列中获取 baseline 水位并订阅后续事件，避免 snapshot 与 subscribe 之间的丢更新窗口。限制缓冲，例如 1000 个 delta；消费者落后时结束流并要求全量同步。
 
 UI 操作带 opId；同一会话 disposition 请求串行，失败只回滚该 opId 尚未被新状态替代的乐观值。原生 pin/archive 以宿主回执及快照确认。搜索和 refreshFacts 用 AbortController、generation 防迟到。快捷切换 A→B→A 由 `uiWorkspace` 控制选择，插件不得在旧 Promise 回调重设选中会话。
 
-所有 slots、locale、shortcuts、contextMenus、subscriptions、timers、CSS 注入均有幂等 disposer。Host 停用先拒绝新请求、取消跟随和 timer、排空已接受写入、关闭 domain；Client 停用清理所有订阅/覆盖。渲染错误边界能释放本插件覆盖，原始 slot 回为赢家；模块加载前失败应不触及原注册。API 丢失、非 owner、协议不兼容时不占据主替换槽，保留原生体验并在独立插件诊断入口显示原因。不得劫持别的插件注册来恢复原生。
+所有 slots、locale、shortcuts、contextMenus、subscriptions、timers、CSS 注入均有幂等 disposer。Host 停用先拒绝新请求、取消跟随和 timer、排空已接受写入、关闭 domain；Client 停用清理所有订阅/覆盖。渲染错误边界能释放本插件覆盖，原始 slot 回为赢家；模块加载前失败应不触及原注册。设置页保留后端与权限诊断。
 
 ## 8. 权限和扩展兼容
 
-v0.1 自有 endpoint 保持 Gateway 默认 owner-only；远程连接的 owner 可使用，但共享 guest 不启用任务元数据视图，回退原生。不得从 `principalOf() === undefined` 单独推断调用者已获授权，仍由 Gateway 的实际 invocation/连接边界验证。后续 guest 需为 snapshot、delta、每个 mutation 加资源裁切和撤权移除后才能启用。
+v0.1 自有 endpoint 保持 Gateway 默认 owner-only。Client 通过 `remoteAccess.whenAccess('t3Sidebar/getSnapshot', …)` 跟踪访问许可，guest 默认使用原生侧栏。撤权时撤下任务侧栏、清除已显示的 Host 任务状态、取消订阅和待重试写入。Host 发送非 owner 的流帧前再次调用 `remoteAccess.allows`，覆盖已经打开的流。是否接纳请求由 Gateway 按真实 Peer 判定。后续若支持 guest 任务视图，仍需为 snapshot、delta 和每个 mutation 实现资源裁切。
 
 原生导航和管理仍按 remoteAccess 的真实 capability 判断，Host 再校验。显示层 title/path/snippet 只作文本，不解释 HTML。日志只记错误码、耗时、计数、不可逆散列 ID；不记正文、目录全路径、token 或请求敏感参数。默认不加遥测上报。
 

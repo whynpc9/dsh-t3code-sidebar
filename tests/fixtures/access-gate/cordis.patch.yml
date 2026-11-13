@@ -1,0 +1,4 @@
+# Test fixture only. Install in an isolated loopback Web profile.
+- insert:
+    - id: t3code-access-gate-fixture
+      name: dsh-t3code-access-gate-fixture
