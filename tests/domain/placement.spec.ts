@@ -31,6 +31,12 @@ describe('derivePlacement', () => {
   it('never reports unknown running as idle', () => {
     expect(rowStatus(facts({ running: 'unknown', activity: 'unknown' }), null)).toBe('unknown')
   })
+
+  it('does not label an unfamiliar turn end reason as a completed result', () => {
+    const outcome = facts({ summary: { lastTurnStartSeq: 1, lastTurnEnd: { seq: 9, at: T0, reason: 'future-reason' } } })
+    expect(rowStatus(outcome, null)).toBe('needs-check')
+    expect(derivePlacement(outcome, undefined, native, T0)).toBe('active')
+  })
 })
 
 describe('Snooze', () => {

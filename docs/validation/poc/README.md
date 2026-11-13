@@ -165,7 +165,7 @@ DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对�
 | --- | --- |
 | 审批态的端到端（A02 中“等待审批”一步、A03 新审批唤醒） | 2026-11-12 已在 Linux Web 通过（审批夹具），见上节；Desktop 未测 |
 | 自动 Settled 的真实跨天迁移 | 最小窗口 1 天；规则与边界由单元测试覆盖（T01–T05、T07、T09），集成层只验证了策略与调度器运行 |
-| A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | A07/A08 已有 DOM 组件测试；A12 规模已在 Linux Web 测量（上节）；A10 与读屏仍未验证 |
+| A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | A07/A08 已有 DOM 组件测试；A12 规模已在 Linux Web 测量（上节）；A10 见 [后续 Web 验证](../a10/README.md)，读屏仍待验证 |
 | Workspace 级策略覆盖、多 membership 的 `policyWorkspaceId` | 2026-11-12 已实现并在 Linux Web 通过；多 membership 在 0.2.2-rc.1 中不可能出现，无需 `policyWorkspaceId` |
 | macOS Desktop | M6（Q2）部分完成。#2/#3 的停放后 ⌘Q 重启已通过，其他桌面验收状态见上方 macOS Desktop 复验 |
 | 剩余发布门禁 | 规模下的首屏时间、更新和搜索延迟、DOM 行数、内存及 20 次 Desktop 启停。真实断网下的 `connection/reset` 已有受控测试，仍待实机复验。 |

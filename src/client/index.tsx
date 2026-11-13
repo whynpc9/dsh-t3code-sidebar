@@ -15,7 +15,7 @@ import type { CommandAction } from '../contracts/schema.ts'
 import { snoozePresets } from '../domain/time.ts'
 import { known, type NativeState, type TaskFacts } from '../domain/types.ts'
 import {
-  ConnectAbortedError, connectHostBackend, HostConnectError, initialBackendState, LocalBackend,
+  ConnectAbortedError, connectHostBackend, forbiddenBackendState, HostConnectError, initialBackendState, LocalBackend,
   type BackendState, type CommandOutcome, type HostFailure, type RecoveryNotice, type TaskBackend,
 } from './backend.ts'
 import { SettingsPage } from './components/SettingsPage.tsx'
@@ -29,7 +29,7 @@ import { NO_REQUESTS, watchSlot, type ShortcutRequests, type SlotEntryLike, type
 import { createStore, type Readable, type Store } from './store.ts'
 import { browserObservedWakes, WakeDispatcher } from './wakes.ts'
 
-export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'contextMenus', 'remote', 'locale']
+export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'contextMenus', 'remote', 'remoteAccess', 'locale']
 
 /** Below the native browser (0); configurable through `localStorage` for slot conflicts. */
 const SLOT_PRIORITY = -10
@@ -68,6 +68,7 @@ interface ClientCtx {
     close?(): void
   }
   remote: { $mount(contribution: unknown): Promise<() => Promise<void> | void>; [key: string]: unknown }
+  remoteAccess: { whenAccess(action: string, callback: () => () => void): () => void }
   inject(deps: string[], callback: (scoped: ClientCtx) => void | (() => void)): () => void
   locale: Readable<unknown> & { register(ns: string, dicts: Record<string, Record<string, string>>): () => void; bind(ns: string): (key: string, params?: Record<string, unknown>) => string }
   effect(callback: () => () => void, label?: string): () => void
@@ -172,6 +173,9 @@ export function apply(rawCtx: Context): void {
   }
 
   const command = async (sessionId: string, action: CommandAction): Promise<CommandOutcome> => {
+    if (backendState.getSnapshot().failure === 'forbidden') {
+      return { ok: false, code: 'FORBIDDEN', message: 'task access denied', task: null }
+    }
     const live = liveFacts(sessionId)
     if (backend === null || live === null) {
       return { ok: false, code: 'BASELINE_PENDING', message: 'not connected', task: null }
@@ -216,7 +220,10 @@ export function apply(rawCtx: Context): void {
     },
     command,
     setPolicy: async draft => backend === null
-      ? { ok: false, code: 'STORAGE_UNAVAILABLE', message: 'not connected', policy: backendState.getSnapshot().policy }
+      ? {
+          ok: false, code: backendState.getSnapshot().failure === 'forbidden' ? 'FORBIDDEN' : 'STORAGE_UNAVAILABLE',
+          message: 'task service unavailable', policy: backendState.getSnapshot().policy,
+        }
       : await backend.setPolicy(draft),
     listTransitions: async limit => backend === null ? [] : await backend.listTransitions(limit),
     previewPolicy: async draft => backend === null ? null : await backend.previewPolicy(draft),
@@ -265,10 +272,31 @@ export function apply(rawCtx: Context): void {
   // timer) is released by its disposer, and work that finishes after the
   // disposer ran (a late connect or failure) creates nothing.
   ctx.effect(() => {
+    backendState.set(forbiddenBackendState)
+    return ctx.remoteAccess.whenAccess('t3Sidebar/getSnapshot', startBackend)
+  }, 't3Sidebar: task access')
+
+  function startBackend(): () => void {
     const owner = new AbortController()
     let release = (): void => {}
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let attempt = 0
+    backendState.set(initialBackendState)
+
+    const stopBackend = () => {
+      if (owner.signal.aborted) return
+      owner.abort()
+      clearTimeout(retryTimer)
+      release()
+      release = () => {}
+      backend?.dispose()
+      backend = null
+      backendState.set(forbiddenBackendState)
+      snoozeRequest.set(null)
+      clearTimeout(noticeTimer)
+      notice.set(null)
+      if (ctx.contextMenus.active?.getSnapshot()?.kind === 'session') ctx.contextMenus.close?.()
+    }
 
     const adopt = (next: TaskBackend, extra: () => void = () => {}) => {
       backend = next
@@ -277,7 +305,7 @@ export function apply(rawCtx: Context): void {
       release = () => { stop(); extra() }
     }
 
-    const startLocal = (failure: HostFailure, reason: string) => {
+    const startLocal = (failure: 'missing' | 'incompatible', reason: string) => {
       console.warn(`[dsh-t3code-sidebar] Host task service ${failure}; using the browser-only preview:`, reason)
       const local = new LocalBackend(reason, liveFacts, undefined, failure)
       // Feed browser-observed turn boundaries to the local backend.
@@ -302,6 +330,7 @@ export function apply(rawCtx: Context): void {
         signal: owner.signal,
         onConnectionReset: listener => ctx.on('connection/reset', listener),
         onRecovery: notice => notify(recoveryText(notice)),
+        onForbidden: stopBackend,
       }).then((host) => {
         if (owner.signal.aborted) { host.dispose(); return }
         adopt(host)
@@ -309,6 +338,7 @@ export function apply(rawCtx: Context): void {
         if (owner.signal.aborted || error instanceof ConnectAbortedError) return
         const failure: HostFailure = error instanceof HostConnectError ? error.failure : 'transient'
         const reason = error instanceof Error ? error.message : String(error)
+        if (failure === 'forbidden') { stopBackend(); return }
         if (failure !== 'transient') { startLocal(failure, reason); return }
         // A disconnect or Host failure is not a missing Host: keep retrying it
         // instead of forking task state into this browser.
@@ -319,17 +349,8 @@ export function apply(rawCtx: Context): void {
     }
     connect()
 
-    return () => {
-      owner.abort()
-      clearTimeout(retryTimer)
-      release()
-      release = () => {}
-      backend?.dispose()
-      backend = null
-      backendState.set(initialBackendState)
-      clearTimeout(noticeTimer)
-    }
-  }, 't3Sidebar: task backend')
+    return stopBackend
+  }
 
   // ── Persist Snooze wakes caused by requests only this browser observes ──
   ctx.effect(() => {
@@ -344,7 +365,10 @@ export function apply(rawCtx: Context): void {
     })
     const check = () => {
       const state = backendState.getSnapshot()
-      if (state.kind !== 'host' || state.status !== 'ready' || backend === null) return
+      if (state.kind !== 'host' || state.status !== 'ready' || backend === null) {
+        dispatcher.sync([])
+        return
+      }
       dispatcher.sync(browserObservedWakes(state.tasks, liveFacts, Date.now() + state.clockOffset))
     }
     const stops = [status.subscribe(check), sessionsList.subscribe(check), backendState.subscribe(check)]
@@ -352,11 +376,25 @@ export function apply(rawCtx: Context): void {
   }, 't3Sidebar: browser-observed wakes')
 
   // ── Slot: replace the session browsing region ────────────────────────────
-  ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
-    name: 'sidebar.workspaces',
-    priority: SLOT_PRIORITY,
-    inject: () => ({ runtime }),
-  }, TaskSidebar))
+  ctx.slots.inject('sidebar.workspaces', () => {
+    let unregister: (() => void) | undefined
+    const sync = () => {
+      const allowed = backendState.getSnapshot().failure !== 'forbidden'
+      if (allowed && unregister === undefined) {
+        unregister = ctx.slots.register({
+          name: 'sidebar.workspaces',
+          priority: SLOT_PRIORITY,
+          inject: () => ({ runtime }),
+        }, TaskSidebar)
+      } else if (!allowed && unregister !== undefined) {
+        unregister()
+        unregister = undefined
+      }
+    }
+    const stop = backendState.subscribe(sync)
+    sync()
+    return () => { stop(); unregister?.() }
+  })
 
   // ── Settings: this package's page under Plugins (declared while that page is served) ──
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
@@ -413,7 +451,10 @@ export function apply(rawCtx: Context): void {
               disabled,
               run: run({ kind: 'snooze', until: preset.until }),
             })),
-            { id: 'snooze.custom', label: t('menu.snoozeCustom'), separatorBefore: true, disabled, run: () => { snoozeRequest.set(sessionId) } },
+            {
+              id: 'snooze.custom', label: t('menu.snoozeCustom'), separatorBefore: true, disabled,
+              run: () => { if (backendState.getSnapshot().status === 'ready') snoozeRequest.set(sessionId) },
+            },
           ],
         })
       }

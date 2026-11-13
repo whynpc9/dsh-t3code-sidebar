@@ -37,7 +37,7 @@
 | F01–F11 功能 | 有证据 | 端到端 `scenario.mjs` 20/20、`features.mjs` 14/14；单元/组件 230 项 |
 | A02 等待审批 / A03 新审批唤醒 | **通过（Linux Web）** | 本机无 bubblewrap，bash 不升级沙箱；以测试专用 `approval-gate` 夹具经真实审批流程触发 |
 | A07 搜索竞态 / A08 键盘 | 自动化 | `tests/client/sidebar.spec.tsx`（真实 DOM）+ e2e N09 |
-| A10 权限撤回 / guest | **缺** | 单机 owner 场景之外的 guest 连接未测试；Host 侧无独立鉴权逻辑（依赖 Gateway owner 鉴权） |
+| A10 权限撤回 / guest | **通过（Web，隔离 Gateway 夹具）** | guest 默认原生侧栏；撤权后关闭任务视图、拒绝读写和后续流帧；未知写入被拒；任务 API 关闭时 owner 仍可用本地预览。见 [验证记录](validation/a10/README.md) |
 | A12 规模 | 有测量 | 见验证记录的规模测量；预算偏差列在该节 |
 | 读屏 | **缺** | 角色/aria 标签已有，未用读屏实测 |
 | T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |

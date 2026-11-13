@@ -54,6 +54,24 @@ afterEach(() => {
 })
 
 describe('HostBackend generations', () => {
+  it('clears an established snapshot on a permission refusal and drops pending replies', async () => {
+    const backend = start()
+    await ready(backend)
+    const pending = backend.command('s1', { kind: 'settle' }, context)
+    await flush()
+    remote.stream.end({ code: 'remote-access/denied' })
+    await flush()
+    expect(backend.state.getSnapshot()).toMatchObject({ failure: 'forbidden', tasks: new Map() })
+    expect(remote.stream.aborted).toBe(true)
+    expect(unmounts).toBe(1)
+    remote.commands[0]!.reply.resolve({
+      ok: true, value: { ok: true, task: taskView('s1', 2, 'settled'), dataRevision: 1, replayed: false },
+    })
+    expect(await pending).toMatchObject({ ok: false, task: null })
+    expect((await backend.command('s1', { kind: 'reopen' }, context)).ok).toBe(false)
+    expect(remote.commands).toHaveLength(1)
+  })
+
   it('ignores deltas of the stream a reset replaced and stays stale until the new baseline', async () => {
     remote.honorAbort = false // the old connection keeps delivering
     const backend = start()

@@ -116,12 +116,12 @@ export const FollowEventSchema = z.discriminatedUnion('kind', [
 ])
 
 export const CommandActionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('snooze'), until: z.number().int() }),
-  z.object({ kind: z.literal('settle') }),
-  z.object({ kind: z.literal('reopen') }),
-  z.object({ kind: z.literal('policy-override'), override: z.enum(['inherit', 'disabled']) }),
+  z.strictObject({ kind: z.literal('snooze'), until: z.number().int() }),
+  z.strictObject({ kind: z.literal('settle') }),
+  z.strictObject({ kind: z.literal('reopen') }),
+  z.strictObject({ kind: z.literal('policy-override'), override: z.enum(['inherit', 'disabled']) }),
   /** Shared "I have seen this result" for the keep-unacknowledged protections (time-policy spec §3). */
-  z.object({ kind: z.literal('acknowledge-result'), turnEndSeq: z.number().int().nonnegative() }),
+  z.strictObject({ kind: z.literal('acknowledge-result'), turnEndSeq: z.number().int().nonnegative() }),
 ])
 
 /**
@@ -131,7 +131,7 @@ export const CommandActionSchema = z.discriminatedUnion('kind', [
  */
 export const PendingSignalSchema = z.object({ source: z.string(), key: z.string(), kind: z.string() })
 
-export const CommandInputSchema = z.object({
+export const CommandInputSchema = z.strictObject({
   protocolVersion: z.number(),
   commandId: z.string().min(8).max(80),
   sessionId: z.string().min(1),
@@ -150,7 +150,7 @@ export const CommandResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), code: ErrorCodeSchema, message: z.string(), task: TaskViewSchema.nullable() }),
 ])
 
-export const PolicyInputSchema = z.object({
+export const PolicyInputSchema = z.strictObject({
   protocolVersion: z.number(),
   expectedRevision: z.number().int().nonnegative(),
   autoSettleAfterDays: DaysSchema.nullable(),

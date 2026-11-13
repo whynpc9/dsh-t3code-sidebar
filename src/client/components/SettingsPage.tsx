@@ -111,6 +111,13 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
   }, [policyKey])
 
   useEffect(() => {
+    if (host) return
+    setHistory([])
+    setPreview(null)
+    setMessage(null)
+  }, [host])
+
+  useEffect(() => {
     if (!host || view !== 'page') return
     let live = true
     void runtime.listTransitions(20).then((entries) => { if (live) setHistory(entries) })
@@ -135,7 +142,8 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
     return () => { live = false; clearTimeout(timer) }
   }, [host, view, backend.status, pendingKey, runtime, previewTick, backend.tasks])
 
-  const storage = host ? t('settings.backend.host')
+  const storage = backend.failure === 'forbidden' ? t('settings.backend.forbidden')
+    : host ? t('settings.backend.host')
     : backend.kind === 'local' ? t('settings.backend.local') : t('settings.backend.connecting')
   if (view === 'summary') return <>{storage}</>
 
@@ -202,7 +210,7 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
             <> {t(`settings.backend.failure.${backend.failure}` as Key)}</>
           )}
         </p>
-        {slot.known && !slot.active && (
+        {backend.failure !== 'forbidden' && slot.known && !slot.active && (
           <p className="t3sb-dialog-note t3sb-warning" role="status" data-testid="t3-slot-note">
             {slot.winner === null ? t('settings.slot.shadowedUnknown') : t('settings.slot.shadowed', { name: slot.winner })}
           </p>
