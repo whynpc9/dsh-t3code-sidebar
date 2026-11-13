@@ -16,7 +16,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Key } from '../locales.ts'
 import {
-  buildRows, flatRows, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, FLAT_WINDOW, hostActivityKnown, flatRows, flatWindow, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ArchivedFilter, type ContentHit, type GroupBy, type Row, type SectionKey,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
@@ -125,6 +125,26 @@ function ViewOptionsMenu({ groupBy, archivedFilter, onGroupBy, onArchivedFilter,
   )
 }
 
+/**
+ * Invisible marker after the rendered part of the one list: when it comes
+ * within ~600px of the scrolled list's visible area the window grows.
+ */
+function GrowSentinel({ onReach }: { onReach: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const reach = useRef(onReach)
+  reach.current = onReach
+  useEffect(() => {
+    const element = ref.current
+    if (element === null || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) reach.current()
+    }, { root: element.closest('.t3sb-list'), rootMargin: '0px 0px 600px 0px' })
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [])
+  return <div ref={ref} className="t3sb-grow-sentinel" data-row-key="flat:more" aria-hidden="true" />
+}
+
 function EmptySessions({ archivedOnly, onLeaveArchivedOnly, t }: { archivedOnly: boolean; onLeaveArchivedOnly: () => void; t: Runtime['t'] }) {
   return (
     <div className="t3sb-empty-state" data-row-key="empty">
@@ -155,8 +175,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   }, [runtime])
 
   const rows = useMemo(
-    () => buildRows({ sessions, workspaces, status, tasks: backend.tasks, lastSeen: prefs.lastSeen, now }),
-    [sessions, workspaces, status, backend.tasks, prefs.lastSeen, now],
+    () => buildRows({ sessions, workspaces, status, tasks: backend.tasks, lastSeen: prefs.lastSeen, now, hostActivity: hostActivityKnown(backend) }),
+    [sessions, workspaces, status, backend.tasks, prefs.lastSeen, now, backend.kind, backend.status, backend.capabilities.hostActivity],
   )
   const current = rows.find(row => row.current)
 
@@ -221,6 +241,28 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   // ── Dialogs ──
   const [workspaceDialog, setWorkspaceDialog] = useState<WorkspaceDialog | null>(null)
 
+  // ── Native ⌘K / ⌘O: the native workspace commands only raise requests for the
+  //    browser that owns this slot; consume them as the native browser would. ──
+  const requests = use(runtime.shortcutRequests)
+  const [seenSearchRequest, setSeenSearchRequest] = useState(requests.searchRequest)
+  useEffect(() => {
+    if (requests.searchRequest === seenSearchRequest) return
+    setSeenSearchRequest(requests.searchRequest)
+    setWorkspaceDialog(current => (current?.kind === 'add' ? null : current))
+    if (!wide || searchInput.current?.closest('[inert]')) {
+      setSearchOnExpand(true)
+      expandSidebar?.()
+    } else {
+      changeSearchExpanded(true)
+      focusSearch()
+    }
+  }, [requests.searchRequest])
+  useEffect(() => {
+    if (!requests.addRequested) return
+    setWorkspaceDialog({ kind: 'add' })
+    runtime.closeAddRequest()
+  }, [requests.addRequested, runtime])
+
   // ── Row environment ──
   const ready = backend.status === 'ready'
   const open = useCallback((row: Row) => {
@@ -244,6 +286,9 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     setPrefs({ collapsed: { ...runtime.prefs.getSnapshot().collapsed, [key]: collapsed } })
   }
   const [marks, setMarks] = useState<Readonly<Record<string, number>>>({})
+  // One-list window: back to its first page whenever the grouping or filter changes.
+  const [flatLimit, setFlatLimit] = useState(FLAT_WINDOW)
+  useEffect(() => { setFlatLimit(FLAT_WINDOW) }, [groupBy, archivedFilter])
   const [motionKey, setMotionKey] = useState(0)
   const dropMark = (key: string) => {
     if (marks[key] === undefined) return
@@ -357,10 +402,18 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   } else {
     const list = flatRows(rows, archivedFilter)
     empty = list.length === 0
-    body = list.map((row) => {
+    const shown = flatWindow(list, flatLimit)
+    const nodes: ReactNode[] = shown.rows.map((row) => {
       rowKeys.push(`session:${row.sessionId}`)
       return <SessionRow key={row.sessionId} row={row} env={env} showPin />
     })
+    body = nodes
+    if (shown.hiddenCount > 0) {
+      rowKeys.push('flat:more')
+      // Grow from what is rendered (the window may already reach past the limit to the current session).
+      const rendered = shown.rows.length
+      nodes.push(<GrowSentinel key={`flat:more:${rendered}`} onReach={() => { setFlatLimit(limit => Math.max(limit, rendered) + FLAT_WINDOW) }} />)
+    }
   }
   if (empty) rowKeys.unshift('empty')
 

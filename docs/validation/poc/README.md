@@ -97,6 +97,49 @@ DSH_HOME="$test_root/home" DEEPSEEK_BASE_URL=http://127.0.0.1:47900 \
 DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对路径到 tgz>"
 ```
 
+## 2026-11-12 Linux Web 复验（alpha.2）
+
+环境同上：`@deepseek-ai/dsh@0.2.2-rc.1`、Linux（WSL2）、Node 24.19、headless Chromium 1243，隔离 `DSH_HOME` 与新建 `sbtest` profile，模型为脚本化桩（新增 `#askbash`、`#delaybash`）。被测为 `0.1.0-alpha.2` 预构建 tarball（SHA256 `ed10277efcb885cc81d9fc8310532729c2872999ff0dc731605a00bfbb3931a0`），经 `dsh plugin --profile sbtest add` 安装；安装后的 `lib/client.js`（`3a81ba478a38…a503`）与 `lib/index.js`（`4570f6b64390…10f8`）与仓库构建逐字节一致。结果文件与截图在 [`alpha2/`](alpha2/)。
+
+`pnpm run verify`：类型检查、202 项单元/服务/组件/集成测试、构建（client 46.8 KiB gzip）、pack 检查全部通过。
+
+### 端到端
+
+| 脚本 | 结果 | 说明 |
+| --- | --- | --- |
+| `scenario.mjs main`（新 profile） | **20/20 PASS** | [results-main.json](alpha2/results-main.json) |
+| `scenario.mjs restart`（替换为最终构建并重启 Host） | **PASS** `A04.host-restart-keeps-parking` | [results-restart.json](alpha2/results-restart.json) |
+| `features.mjs` | **14/14 PASS** | [results-features.json](alpha2/results-features.json)，见下表 |
+
+在已用过的 profile 上重跑 `main` 时，`N03.empty-sections-hidden` 失败，因为该检查要求没有已停放的会话，而该 profile 中已有。这属于检查的前提条件不满足，不是缺陷，新 profile 上通过。
+
+| 检查 | 证据 |
+| --- | --- |
+| A02 待审批的会话留在 Active，状态为“等待审批”；Snooze 被拒（A05）；批准后离开审批态 | [截图](alpha2/11-approval.png) |
+| A03 运行中被 Snooze 的会话在之后出现新审批时唤醒回 Active，唤醒已在 Host 持久化（第二个窗口一致） | [截图](alpha2/12-woken.png) |
+| ⌘K（`session.search`）聚焦本侧栏搜索框；⌘O（`workspace.add`）打开添加工作区对话框 | [截图](alpha2/13-shortcut-add.png) |
+| P01 工作区设为“关闭”后保存，新窗口读回为关闭；预览显示“工作区已关闭 N” | [截图](alpha2/14-settings-policy.png) |
+| P04 开启“保留失败的会话”后，预览列出被保留的结果；失败会话的菜单出现“确认此结果”，确认后消失 | 同上 |
+
+关于审批：本机没有 bubblewrap，bash 在无沙箱执行器下不会请求升级，因此 “ask” 策略从不提示。测试改用只在测试中使用的 Host 插件 [`tests/fixtures/approval-gate`](../../../tests/fixtures/approval-gate/)，它经公开的 `tools/pre-execute` 对带 `approval-fixture` 标记的 bash 调用返回 `ask`，走真实的审批服务、审批卡与会话状态。正式 profile 不应安装该夹具。⌘K/⌘O 在 Linux Web 上没有默认绑定，脚本按快捷键设置的存储格式（`dsh.keybindings.v1`）把这两个命令绑定到 Linux Web 允许的 Ctrl+Shift+Comma / Ctrl+Shift+Period。
+
+### 规模测量（Q02）
+
+用 [`scale-seed.mjs`](../../../tests/e2e/scale-seed.mjs) 在另一个新 `DSH_HOME` 中由一条真实会话日志复制出 100 个工作区 × 50 条会话（宿主另自动建 1 条），再用 [`scale.mjs`](../../../tests/e2e/scale.mjs) 测量。计时在页面内取，从触发点击到 DOM 显示结果后的首个动画帧，不含 Playwright 往返。
+
+| 指标（实现 Spec §10 预算） | 空闲 5001 会话 | 48 个并发运行轮次 | 判定 |
+| --- | --- | --- | --- |
+| 首屏（导航开始→带 Host baseline 的任务行，含页面加载） | 2.1 s（重载 1.6–1.8 s） | 1.9 s | 预算 <300 ms 只计 baseline 到达后的渲染，本指标包含页面加载与宿主目录，**未单独分离**，见下 |
+| 视图切换 状态↔工作区↔单列表 p95（<150 ms） | 34 ms | 71 ms | 通过 |
+| 标题/工作区即时搜索 p95（<100 ms） | 17 ms | 14 ms | 通过 |
+| 语义操作 Settle/Unsettle p95（<100 ms，本地） | 115 ms | 113 ms | 含 Host 命令往返（活动与待交互的精确读取）与 follow delta；纯本地渲染部分未单独测 |
+| 常驻会话行（≤ 可视 + 150） | 状态 6、工作区 6、单列表 200 | 53（Working 48 不设水位线） | 通过 |
+| JS 堆 | 35 → 37.5 MB（5 次重载） | 48.8 MB，重载后 40 MB | 无持续增长 |
+
+修复后的回归：单列表原先渲染全部 5001 行，切入单列表的视图切换 p95 为 895 ms。现改为 200 行窗口，随滚动增长并始终包含当前会话。另一个修复：没有插件记录的冷会话原先永远不提供“收起”按钮，因为浏览器把“无视图”当作活动未知。现在 Host 就绪时视其为无后台工作；读取失败的会话由 Host 显式发布为未知。
+
+未完成项：50 个负载提示经界面发送，其中 2 个没有提交，实际并发为 48。首屏渲染没有与页面加载分开计时。Desktop 上的规模与 20 次桌面启停仍待测（M6）。
+
 ## 能力矩阵（G0-C）
 
 | 信号 | Client 实时 | Host 实时 | Host 冷启动 | 本插件用法 |
@@ -120,10 +163,10 @@ DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对�
 
 | 项 | 原因 / 计划 |
 | --- | --- |
-| 审批态的端到端（A02 中“等待审批”一步、A03 新审批唤醒） | 桩模型的 bash 调用在 Workspace Write 模式下无需审批；需切换权限预设后补测 |
+| 审批态的端到端（A02 中“等待审批”一步、A03 新审批唤醒） | 2026-11-12 已在 Linux Web 通过（审批夹具），见上节；Desktop 未测 |
 | 自动 Settled 的真实跨天迁移 | 最小窗口 1 天；规则与边界由单元测试覆盖（T01–T05、T07、T09），集成层只验证了策略与调度器运行 |
-| A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | M4/M5 |
-| Workspace 级策略覆盖、多 membership 的 `policyWorkspaceId` | P01 剩余部分 |
+| A07 搜索竞态、A08 键盘/焦点、A10 权限撤回/guest、A12 规模与读屏 | A07/A08 已有 DOM 组件测试；A12 规模已在 Linux Web 测量（上节）；A10 与读屏仍未验证 |
+| Workspace 级策略覆盖、多 membership 的 `policyWorkspaceId` | 2026-11-12 已实现并在 Linux Web 通过；多 membership 在 0.2.2-rc.1 中不可能出现，无需 `policyWorkspaceId` |
 | macOS Desktop | M6（Q2）部分完成。#2/#3 的停放后 ⌘Q 重启已通过，其他桌面验收状态见上方 macOS Desktop 复验 |
 | 剩余发布门禁 | 规模下的首屏时间、更新和搜索延迟、DOM 行数、内存及 20 次 Desktop 启停。真实断网下的 `connection/reset` 已有受控测试，仍待实机复验。 |
 | Host 侧严格 codec | Host 走 SRC 分派（无生成器严格描述符），以同一 zod schema 在服务内自行校验；若上游开放外部包的 `./typert` 生成路径再切换 |
@@ -140,4 +183,14 @@ node tests/fixtures/mock-llm.mjs 47900 &
 DEEPSEEK_BASE_URL=http://127.0.0.1:47900 DEEPSEEK_API_KEY=sk-fixture \
   npx -p @deepseek-ai/dsh@0.2.2-rc.1 dsh --profile sbtest --no-open --port 47821 --host 127.0.0.1
 node tests/e2e/scenario.mjs "<打印出的带 token URL>" <一个空目录> docs/validation/poc/e2e main
+
+# 2026-11-12 新功能（需同一 profile 另装测试专用审批夹具；启动桩时设 MOCK_DELAY_MS=10000）
+(cd tests/fixtures/approval-gate && npm pack --pack-destination "$DSH_HOME")
+npx -p @deepseek-ai/dsh@0.2.2-rc.1 dsh plugin --profile sbtest add "$DSH_HOME/dsh-t3code-approval-gate-fixture-0.0.1.tgz"
+node tests/e2e/features.mjs "<带 token URL>" <输出目录>
+
+# 规模（另一个从未启动过的 DSH_HOME；模板取任一已完成会话的 session.v4.jsonl.zstd；需 zstd CLI）
+node tests/e2e/scale-seed.mjs "$SCALE_HOME" <工作区根目录> <模板日志> 100 50
+node tests/e2e/scale.mjs "<带 token URL>" <输出目录> 0     # 空闲
+node tests/e2e/scale.mjs "<带 token URL>" <输出目录> 50    # 另起 50 个慢速轮次（启动桩时设 MOCK_SLOW_MS=300000）
 ```

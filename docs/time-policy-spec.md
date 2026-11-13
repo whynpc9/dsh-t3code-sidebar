@@ -2,6 +2,25 @@
 
 版本：Draft 0.1 · 2026-11-08。本文件定义按指定时间窗口自动转移会话状态的功能、参数、保护条件与交付阶段，是时间规则的权威规格。
 
+## 0. 实现状态（C01 回写，2026-11-12，`0.1.0-alpha.2`）
+
+契约以 `src/contracts/schema.ts` 为准（摘要见[实现 Spec §4.0/§5.0](implementation-spec.md#40-契约-v1c01-冻结2026-11-12)）。本文其余部分仍是规则的权威描述；下表记录 v0.1 实际落地的范围与取舍。
+
+| 规则 | 状态 | 实现 |
+| --- | --- | --- |
+| 不活跃自动 Settled（§3） | 已实现 | 默认 7 天（Host 侧事实已证实，未降级为默认 Off）；1–90 天或关闭；首次安装完整宽限 |
+| 作用域 Host 默认 → Workspace → Session（§2） | 已实现 | `TimePolicy.workspaceOverrides`：缺省=继承，`{mode:'off'}`，`{mode:'custom',days}`；Session 菜单“此会话不自动收起 / 跟随项目” |
+| 多 membership 与 `policyWorkspaceId`（§2） | 不需要 | Harness 0.2.2-rc.1 中会话 membership 要求 header cwd 等于工作区唯一的规范路径，一个会话至多属于一个工作区；因此不存储 `policyWorkspaceId`。若上游改为允许多 membership，应恢复此字段 |
+| 宽限范围（§2） | 已实现 | Host 默认变严（开启/缩短）→ 仅跟随默认的会话（`global.policyEligibleSince`）；某工作区有效窗口变严 → 仅其成员（`workspaceEligibleSince`）；会话因工作区增删而换规则 → 该会话（`sessionEligibleSince`，由每次 sweep 比较 `membership`；规则不变时也带走原工作区尚未用完的宽限）；关闭保留选项 → 全部 |
+| `effectivePolicyIdentity` / `eligibilityEpoch` | 以规则身份字符串替代 | `effectivePolicy().identity`（如 `host:7`、`workspace:<id>:off`）；身份变化即视为作用域变化 |
+| 保留未确认结果/失败（§3） | 已实现 | `keepUnacknowledgedResults`、`keepUnacknowledgedFailures`；异常结果 = completed/aborted 以外的结束原因（error、blocked、max-tokens、interrupted、未知） |
+| 保留选项下的历史结果 | 已实现 | 开启任一保留选项时，结果可能早于本进程（安装前、Host 半边未运行期间）的超期候选，先在后台只读重放其存储日志，补齐最新结果后再判定；补齐前或日志不可读时跳过（`result-unknown`），不会假定没有结果，也不以摘要中可能已过时的结果判定；某次事件折叠写入失败后，在重放成功前一直视为未知 |
+| 成员关系不可读 | 已实现 | 存在 Workspace 覆盖而注册表读取失败，或成员变化带来的宽限尚未持久化时，生效规则未知，跳过（`scope-unknown`），不回落到 Host 默认；下一次 sweep 重试写入 |
+| `acknowledgeResult(token)` | 已实现为命令 | `command` 的 `acknowledge-result{turnEndSeq}`，写 `TaskRecord.resultAcknowledgedSeq`（单调，只能确认已折叠的结果）；与浏览器个人已读分离；行菜单“确认此结果”，设置预览“全部确认” |
+| `previewPolicy`（§7） | 已实现 | 不写入；可预览未保存草稿（含保存后将启动的宽限）：一分钟内到期数、下一期限、跳过原因、被保留的结果 |
+| “应用于已存在的超期会话”的显式追溯 | 未实现 | 预览只展示；变严一律给宽限 |
+| 自动 Archived、PR、限额（§5、§6） | 未实现（v0.2/v0.3） | 字段未进入 schema |
+
 ## 1. T3 Code 对照与交付范围
 
 已核对固定源码的[完整时间策略证据](research/t3-time-policies.md)，以下不能混为一套“自动归档”。

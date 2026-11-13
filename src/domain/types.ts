@@ -75,6 +75,13 @@ export interface TaskFacts {
   readonly pending: Known<readonly PendingSignal[]>
   readonly activity: Known<readonly string[]>
   readonly summary: ActivitySummary
+  /**
+   * Whether `summary` is known to include the session's latest result. False
+   * when results may predate installation or have been written while the
+   * Host half was not running and the stored log has not been replayed yet.
+   * Omitted: known.
+   */
+  readonly resultHistoryKnown?: boolean
 }
 
 /** Native Harness state; the plugin never stores pin/archive itself. */
@@ -132,6 +139,12 @@ export interface TaskRecord {
   readonly lastSnoozeWakeAt: number | null
   /** Folded activity; persisted so cold sessions keep their anchors across restarts. */
   readonly activity: ActivitySummary
+  /**
+   * Turn-end seq of the latest result acknowledged with "Acknowledge result"
+   * (shared across windows, unlike the per-browser read marker). Results up to
+   * it no longer hold the session under the keep-unacknowledged protections.
+   */
+  readonly resultAcknowledgedSeq: number | null
   /** Most recent accepted command ids → resulting revision (idempotent retries). */
   readonly receipts: readonly { readonly commandId: string; readonly revision: number; readonly digest: string }[]
 }
@@ -146,17 +159,35 @@ export function emptyRecord(sessionId: string, now: number): TaskRecord {
     policyEligibleSince: now,
     lastSnoozeWakeAt: null,
     activity: EMPTY_ACTIVITY,
+    resultAcknowledgedSeq: null,
     receipts: [],
   }
 }
 
-/** Global automatic-settle policy (v0.1 subset of the time-policy spec). */
+/**
+ * Workspace-level override of the Host default (time-policy spec §2). An
+ * absent entry inherits; `off` and `custom` are explicit, so "off" never
+ * doubles as "inherit".
+ */
+export type WorkspacePolicyOverride =
+  | { readonly mode: 'off' }
+  | { readonly mode: 'custom'; readonly days: number }
+
+/** Automatic-settle policy (v0.1 subset of the time-policy spec). */
 export interface TimePolicy {
   readonly revision: number
-  /** Whole days 1..90, or null when automatic settling is off. */
+  /** Host default: whole days 1..90, or null when automatic settling is off. */
   readonly autoSettleAfterDays: number | null
+  /** Abnormal results (failure, blocked, max tokens, interrupted, unknown) hold the session until acknowledged. */
   readonly keepUnacknowledgedFailures: boolean
+  /** Every result holds the session until acknowledged. */
+  readonly keepUnacknowledgedResults: boolean
+  /** Per-workspace overrides keyed by workspace id; absent means inherit the Host default. */
+  readonly workspaceOverrides: Readonly<Record<string, WorkspacePolicyOverride>>
 }
+
+export const MIN_AUTO_SETTLE_DAYS = 1
+export const MAX_AUTO_SETTLE_DAYS = 90
 
 export const DEFAULT_AUTO_SETTLE_DAYS = 7
 

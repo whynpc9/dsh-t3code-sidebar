@@ -246,3 +246,23 @@ describe('preferences', () => {
     expect(migratePrefs({ groupBy: 'tree', archivedFilter: 'all' })).toMatchObject({ groupBy: 'status', archivedFilter: 'default' })
   })
 })
+
+describe('Host activity completeness', () => {
+  it('treats a session without a Host view as idle only while a ready Host reports activity', () => {
+    const base = inputs()
+    const row = (hostActivity: boolean) => buildRows({ ...base, hostActivity }).find(entry => entry.sessionId === 'd')!
+    expect(row(false).facts.activity).toEqual({ known: false })
+    expect(row(true).facts.activity).toEqual(known([]))
+    // Pinned rows offer no quick action; an unpinned idle session without a view now offers Settle.
+    const unpinned = { ...base, workspaces: { ...base.workspaces, pinnedSessionIds: [] }, hostActivity: true }
+    expect(quickActionOf(buildRows(unpinned).find(entry => entry.sessionId === 'd')!)).toBe('settle')
+    expect(quickActionOf(buildRows({ ...unpinned, hostActivity: false }).find(entry => entry.sessionId === 'd')!)).toBe(null)
+  })
+
+  it('keeps an explicit unknown answer unknown', () => {
+    const base = inputs()
+    const view: TaskView = { sessionId: 'd', record: emptyRecord('d', 0), activity: null, autoSettleDeadline: null, autoSettleSkip: null }
+    const rows = buildRows({ ...base, tasks: new Map([...base.tasks, ['d', view]]), hostActivity: true })
+    expect(rows.find(entry => entry.sessionId === 'd')!.facts.activity).toEqual({ known: false })
+  })
+})

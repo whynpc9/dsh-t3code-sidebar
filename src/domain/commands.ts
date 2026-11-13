@@ -138,6 +138,18 @@ export function setPolicyOverride(record: TaskRecord, override: SessionPolicyOve
   return { ok: true, record: next(record, { policyOverride: override, policyEligibleSince: override === 'inherit' ? now : record.policyEligibleSince }) }
 }
 
+/**
+ * Shared acknowledgement of a result (time-policy spec §3, `acknowledgeResult`):
+ * only a result the record has folded can be acknowledged, and the mark never
+ * moves backwards (acknowledging an older result again is a no-op).
+ */
+export function acknowledgeResult(record: TaskRecord, turnEndSeq: number): Transition {
+  const end = record.activity.lastTurnEnd
+  if (end === null || turnEndSeq > end.seq) return fail('NOT_FOUND', 'no such result yet')
+  const current = record.resultAcknowledgedSeq
+  return { ok: true, record: next(record, current !== null && current >= turnEndSeq ? {} : { resultAcknowledgedSeq: turnEndSeq }) }
+}
+
 /** Committed session event, reduced to the fields the summary folds. */
 export type FoldableEvent =
   | { readonly type: 'user/message'; readonly seq: number; readonly time: number; readonly human: boolean }
@@ -161,6 +173,60 @@ export function foldActivity(summary: ActivitySummary, event: FoldableEvent): Ac
       if (summary.lastTurnEnd !== null && summary.lastTurnEnd.seq >= event.seq) return summary
       return { ...summary, lastTurnEnd: { seq: event.seq, at: event.time, reason: event.reason } }
   }
+}
+
+/**
+ * Undo an automatic settle that a just-folded result says was premature: the
+ * turn was still ending while the sweep judged the session (any later turn
+ * start reopens a settled task anyway), and an active keep protection holds
+ * that result until it is acknowledged. Manual settles are never undone here.
+ * Returns null when nothing changes.
+ */
+export function releaseHeldAutoSettle(
+  record: TaskRecord,
+  held: (record: TaskRecord) => boolean,
+): TaskRecord | null {
+  const disposition = record.disposition
+  if (disposition.kind !== 'settled' || disposition.reason !== 'idle-timeout') return null
+  return held(record) ? { ...record, disposition: { kind: 'normal' } } : null
+}
+
+/**
+ * Merge a session's replayed history into its record. A parking (Snooze or
+ * Settle) accepted while the summary still missed older events keeps its
+ * meaning: replayed events that predate the parking advance its baselines, so
+ * only events after it can wake or reopen the task. A reopen hold is extended
+ * over every replayed event (conservative: it only keeps the hold longer).
+ * Returns the record unchanged when the replay adds nothing.
+ */
+export function mergeHistory(record: TaskRecord, events: readonly FoldableEvent[]): TaskRecord {
+  let activity = record.activity
+  for (const event of events) activity = foldActivity(activity, event)
+  if (activity === record.activity) return record
+  const latest = (current: number | null, values: readonly number[]): number | null =>
+    values.reduce<number | null>((best, value) => (best === null || value > best ? value : best), current)
+  const inputs = (before: number) => events.filter(e => e.type === 'user/message' && e.human && e.time < before).map(e => e.time)
+  const starts = (before: number) => events.filter(e => e.type === 'turn/start' && e.time < before).map(e => e.seq)
+  const ends = (before: number) => events.filter(e => e.type === 'turn/end' && e.reason !== 'forked' && e.time < before).map(e => e.seq)
+  let disposition = record.disposition
+  if (disposition.kind === 'settled') {
+    disposition = {
+      ...disposition,
+      baselineUserInputAt: latest(disposition.baselineUserInputAt, inputs(disposition.enteredAt)),
+      baselineTurnStartSeq: latest(disposition.baselineTurnStartSeq, starts(disposition.enteredAt)),
+    }
+  } else if (disposition.kind === 'snoozed') {
+    disposition = {
+      ...disposition,
+      baselineUserInputAt: latest(disposition.baselineUserInputAt, inputs(disposition.setAt)),
+      baselineTurnEndSeq: latest(disposition.baselineTurnEndSeq, ends(disposition.setAt)),
+    }
+  }
+  const hold = record.autoSettleHold === null ? null : {
+    baselineUserInputAt: latest(record.autoSettleHold.baselineUserInputAt, inputs(Number.POSITIVE_INFINITY)),
+    baselineTurnStartSeq: latest(record.autoSettleHold.baselineTurnStartSeq, starts(Number.POSITIVE_INFINITY)),
+  }
+  return next(record, { activity, disposition, autoSettleHold: hold })
 }
 
 /**

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 
 const listing = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8' }))[0]
 const files = listing.files.map(file => file.path).sort()
-const required = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md']
+const required = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'CHANGELOG.md']
 const missing = required.filter(file => !files.includes(file))
 const forbidden = files.filter(file => /^(src|tests|scripts|docs)\/|\.env|\.tgz$|node_modules/.test(file))
 const problems = []

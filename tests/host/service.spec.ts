@@ -166,7 +166,9 @@ describe('T3SidebarService', () => {
     const storage = new MemoryDomainFacility()
     await boot(storage, { s1: 'r1', s2: 'r1' })
     // Installed long ago, so the restarted window is distinguishable from it.
-    ;(storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number }).policyEligibleSince = 1
+    const installed = storage.data.get('t3_sidebar')!.global as { policyEligibleSince: number; installedAt: number }
+    installed.policyEligibleSince = 1
+    installed.installedAt = 1
     const reenabledAt = Date.now()
     const second = await boot(storage, { s1: 'r2', s2: 'r1' })
     const tasks = second.service.getSnapshot(1).tasks
@@ -207,6 +209,19 @@ describe('T3SidebarService', () => {
     // The implicit revision-0 record accepts commands.
     host.activity.set('s2', [])
     expect(await service.command(command({ sessionId: 's2', action: { kind: 'settle' } }))).toMatchObject({ ok: true })
+  })
+
+  it('publishes unstored sessions whose activity could not be read, so Clients do not assume they are idle', async () => {
+    const { service, host } = await boot()
+    ;(host.ctx as unknown as { on(name: string, fn: unknown, prepend: boolean): void }).on('workspace/session-activity', async ({ sessionId }: { sessionId: string }) => {
+      if (sessionId === 's2') throw new Error('provider down')
+      return []
+    }, true)
+    await (service as unknown as { queryActivity(id: string): Promise<unknown> }).queryActivity('s2')
+    await (service as unknown as { queryActivity(id: string): Promise<unknown> }).queryActivity('s1')
+    const views = service.getSnapshot(1).tasks
+    expect(views.find(view => view.sessionId === 's2')).toMatchObject({ activity: null })
+    expect(views.find(view => view.sessionId === 's1')).toBeUndefined()
   })
 
   it('retries a failed activity answer on a later sweep instead of dropping the session', async () => {

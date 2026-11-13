@@ -1,0 +1,80 @@
+{
+  "at": "2026-11-12T15:27:34.411Z",
+  "results": [
+    {
+      "id": "A02.approval-visible",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"approval\"}"
+    },
+    {
+      "id": "A05.no-snooze-over-approval",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"approval\"}"
+    },
+    {
+      "id": "A02.approval-resolved",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "A03.snooze-while-running",
+      "pass": true,
+      "detail": "{\"section\":\"snoozed\",\"status\":\"running\"}"
+    },
+    {
+      "id": "A03.new-approval-wakes",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"approval\"}"
+    },
+    {
+      "id": "A03.wake-persisted",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"approval\"}"
+    },
+    {
+      "id": "U06.shortcut-search-focuses",
+      "pass": true,
+      "detail": "t3sb-search-input"
+    },
+    {
+      "id": "U06.shortcut-add-workspace",
+      "pass": true
+    },
+    {
+      "id": "P01.workspace-override-saved",
+      "pass": true
+    },
+    {
+      "id": "P01.workspace-override-persisted",
+      "pass": true,
+      "detail": "off"
+    },
+    {
+      "id": "P04.preview-names-workspace-off",
+      "pass": true,
+      "detail": "PreviewSessions that would settle within a minute: 0No session is waiting for its window to pass.Not settled automatically: off for the workspace 23"
+    },
+    {
+      "id": "P04.preview-held-results",
+      "pass": true,
+      "detail": "PreviewSessions that would settle within a minute: 0Next: Fixture reply. Done., Nov 19, 11:27 PM.Kept until their result is acknowledged: 2Acknowledge allNot settled automatically: snoozed or settled 4 · running 1"
+    },
+    {
+      "id": "P04.menu-offers-acknowledge",
+      "pass": true,
+      "detail": "[\"Pin session\",\"Snooze\",\"Settle\",\"Acknowledge result\",\"Never auto-settle this session\",\"Rename\",\"Fork session\",\"Copy Session ID\",\"Show in folder\",\"Archive session\"]"
+    },
+    {
+      "id": "P04.acknowledged-result-released",
+      "pass": true,
+      "detail": "[\"Pin session\",\"Snooze\",\"Settle\",\"Never auto-settle this session\",\"Rename\",\"Fork session\",\"Copy Session ID\",\"Show in folder\",\"Archive session\"]"
+    }
+  ],
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

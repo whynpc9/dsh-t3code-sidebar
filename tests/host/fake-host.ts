@@ -23,7 +23,10 @@ export class MemoryDomainFacility {
   failAuditWrites = false
   /** When set, global writes wait for it (a slow disk). */
   globalGate: Promise<void> | null = null
+  /** When set, opening a domain waits for it (slow storage at startup). */
+  openGate: Promise<void> | null = null
   async open(spec: Spec) {
+    if (this.openGate !== null) await this.openGate
     let unit = this.data.get(spec.name)
     if (unit === undefined) {
       unit = { global: null, tables: new Map(Object.keys(spec.tables).map(name => [name, new Map()])) }
@@ -62,7 +65,13 @@ export class MemoryDomainFacility {
 export interface FakeHost {
   ctx: Context
   storage: MemoryDomainFacility
-  registry: { pinnedSessionIds: string[]; archivedSessionIds: string[] }
+  registry: {
+    pinnedSessionIds: string[]
+    archivedSessionIds: string[]
+    /** Workspace membership as the registry projects it (`list()`). */
+    workspaces: { id: string; sessionIds: string[] }[]
+    list(): readonly { id: string; sessionIds: readonly string[] }[]
+  }
   activity: Map<string, string[]>
   headers: { id: string; createdAt: number; origin?: 'subagent'; revision?: string }[]
   /** Durable `userQuestions.active` per session for exact projection reads. */
@@ -95,7 +104,10 @@ export function appendStored(host: FakeHost, sessionId: string, type: string, da
 
 export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   const ctx = new Context()
-  const registry = { pinnedSessionIds: [] as string[], archivedSessionIds: [] as string[] }
+  const registry: FakeHost['registry'] = {
+    pinnedSessionIds: [], archivedSessionIds: [], workspaces: [],
+    list() { return this.workspaces },
+  }
   const activity = new Map<string, string[]>()
   const headers: FakeHost['headers'] = []
   const questions = new Map<string, { callId: string; state: string }[]>()

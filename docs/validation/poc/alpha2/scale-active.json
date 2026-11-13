@@ -1,0 +1,167 @@
+{
+  "at": "2026-11-12T15:22:51.457Z",
+  "url": "http://127.0.0.1:47822/?token=…",
+  "activeTurns": 50,
+  "metrics": {
+    "firstRowsMs": 1880,
+    "firstRowsNote": "navigation to first task rows with the Host backend; includes page load and the Host catalog/baseline",
+    "status": {
+      "sessionRows": 6,
+      "allNodes": 117,
+      "sections": {
+        "active": 6
+      }
+    },
+    "heapAfterLoadMb": 34.4,
+    "workingRows": 48,
+    "withActive": {
+      "sessionRows": 53,
+      "allNodes": 987,
+      "sections": {
+        "active": 5,
+        "working": 48
+      }
+    },
+    "heapWithActiveMb": 48.8,
+    "viewSwitch": {
+      "timeouts": 0,
+      "n": 30,
+      "p50": 61,
+      "p95": 71,
+      "max": 75
+    },
+    "workspaceView": {
+      "groups": 100,
+      "sessionRows": 48
+    },
+    "flatView": {
+      "sessionRows": 200
+    },
+    "titleSearch": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 11,
+      "p95": 14,
+      "max": 16
+    },
+    "searchRows": 20,
+    "semanticUpdate": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 111,
+      "p95": 113,
+      "max": 114
+    },
+    "semanticUpdateNote": "click → row in its new section, including the Host command round trip and the follow delta",
+    "heapFinalMb": 40,
+    "final": {
+      "sessionRows": 53,
+      "allNodes": 987,
+      "sections": {
+        "active": 5,
+        "working": 48
+      }
+    }
+  },
+  "samples": {
+    "viewSwitchMs": [
+      65,
+      71,
+      59,
+      66,
+      69,
+      49,
+      66,
+      69,
+      57,
+      64,
+      69,
+      52,
+      63,
+      61,
+      49,
+      57,
+      66,
+      45,
+      59,
+      62,
+      52,
+      62,
+      65,
+      49,
+      61,
+      75,
+      55,
+      65,
+      61,
+      54
+    ],
+    "titleSearchMs": [
+      16,
+      9,
+      11,
+      11,
+      11,
+      10,
+      12,
+      11,
+      10,
+      10,
+      12,
+      11,
+      11,
+      11,
+      11,
+      10,
+      11,
+      10,
+      12,
+      14
+    ],
+    "semanticUpdateMs": [
+      111,
+      97,
+      97,
+      111,
+      111,
+      111,
+      112,
+      111,
+      112,
+      114,
+      111,
+      110,
+      111,
+      111,
+      111,
+      113,
+      111,
+      112,
+      111,
+      111
+    ],
+    "reloads": [
+      {
+        "firstRowsMs": 1664,
+        "heapMb": 37.5
+      },
+      {
+        "firstRowsMs": 2043,
+        "heapMb": 37.8
+      },
+      {
+        "firstRowsMs": 1972,
+        "heapMb": 38.5
+      },
+      {
+        "firstRowsMs": 1907,
+        "heapMb": 39.3
+      },
+      {
+        "firstRowsMs": 1916,
+        "heapMb": 40
+      }
+    ]
+  },
+  "errors": []
+}

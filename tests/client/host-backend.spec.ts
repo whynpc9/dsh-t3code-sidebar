@@ -8,6 +8,9 @@ import { HostBackend, type CommandContext, type RecoveryNotice } from '../../src
 import { EMPTY_ACTIVITY, known } from '../../src/domain/types.ts'
 import { baseline, delta, FakeRemote, flush, POLICY, ResetSource, snapshot, taskView } from './remote-fakes.ts'
 
+const draft = (days: number | null, keepFailures: boolean) =>
+  ({ autoSettleAfterDays: days, keepUnacknowledgedFailures: keepFailures, keepUnacknowledgedResults: false, workspaceOverrides: {} })
+
 const context: CommandContext = {
   native: { pinned: false, archived: false },
   facts: { running: known(false), pending: known([]), activity: known([]), summary: EMPTY_ACTIVITY },
@@ -154,7 +157,7 @@ describe('HostBackend generations', () => {
     await ready(backend)
     resets.fire()
     expect(await backend.command('s1', { kind: 'settle' }, context)).toMatchObject({ ok: false, code: 'BASELINE_PENDING' })
-    expect(await backend.setPolicy(3, false)).toMatchObject({ ok: false, code: 'BASELINE_PENDING', policy: POLICY })
+    expect(await backend.setPolicy(draft(3, false))).toMatchObject({ ok: false, code: 'BASELINE_PENDING', policy: POLICY })
     expect(remote.commands).toHaveLength(0)
     expect(remote.policies).toHaveLength(0)
     remote.stream.push(baseline('e1', 0, [taskView('s1', 1)]))
@@ -168,16 +171,16 @@ describe('HostBackend generations', () => {
   it('keeps the newest policy when two replies arrive in reverse order', async () => {
     const backend = start()
     await ready(backend)
-    const first = backend.setPolicy(5, false)
-    const second = backend.setPolicy(3, true)
+    const first = backend.setPolicy(draft(5, false))
+    const second = backend.setPolicy(draft(3, true))
     await flush()
-    remote.policies[1]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 2, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true } } })
+    remote.policies[1]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 2, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} } } })
     await second
-    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false } } })
+    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} } } })
     await first
-    expect(backend.state.getSnapshot().policy).toEqual({ revision: 2, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true })
+    expect(backend.state.getSnapshot().policy).toEqual({ revision: 2, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} })
     // A delta published before the second write arrives late: still revision 2.
-    remote.stream.push(delta('e1', 1, [], { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false }))
+    remote.stream.push(delta('e1', 1, [], { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} }))
     await flush()
     expect(backend.state.getSnapshot().policy.revision).toBe(2)
   })
@@ -185,9 +188,9 @@ describe('HostBackend generations', () => {
   it('resynchronizes when a policy reply contradicts the same revision', async () => {
     const backend = start()
     await ready(backend)
-    const write = backend.setPolicy(5, false)
+    const write = backend.setPolicy(draft(5, false))
     await flush()
-    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 0, autoSettleAfterDays: 30, keepUnacknowledgedFailures: true } } })
+    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 0, autoSettleAfterDays: 30, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} } } })
     await write
     expect(backend.state.getSnapshot()).toMatchObject({ status: 'stale', policy: POLICY })
     expect(remote.streams).toHaveLength(2)
@@ -196,12 +199,12 @@ describe('HostBackend generations', () => {
   it('ignores a policy reply of a previous generation', async () => {
     const backend = start()
     await ready(backend)
-    const write = backend.setPolicy(5, false)
+    const write = backend.setPolicy(draft(5, false))
     await flush()
     resets.fire()
     remote.stream.push(baseline('e2', 0, [], POLICY))
     await flush()
-    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false } } })
+    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} } } })
     await write
     expect(backend.state.getSnapshot().policy).toEqual(POLICY)
   })
@@ -212,7 +215,7 @@ describe('HostBackend generations', () => {
     remote.stream.push(baseline('e1', 0, [taskView('s1', 1)]))
     await flush()
     const command = backend.command('s1', { kind: 'settle' }, context)
-    const policy = backend.setPolicy(5, false)
+    const policy = backend.setPolicy(draft(5, false))
     await flush()
     remote.stream.end() // stream failure: a backoff retry is scheduled
     await flush()
@@ -227,7 +230,7 @@ describe('HostBackend generations', () => {
     expect(unmounts).toBe(1)
     expect(resets.listeners.size).toBe(0)
     remote.commands[0]!.reply.resolve({ ok: true, value: { ok: true, task: taskView('s1', 2, 'settled'), dataRevision: 1, replayed: false } })
-    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false } } })
+    remote.policies[0]!.reply.resolve({ ok: true, value: { ok: true, policy: { revision: 1, autoSettleAfterDays: 5, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} } } })
     await command
     await policy
     resets.fire()
@@ -359,8 +362,8 @@ describe('HostBackend lost replies', () => {
     expect(remote.commands).toHaveLength(6)
   })
 
-  const applied = { revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true }
-  const other = { revision: 1, autoSettleAfterDays: 30, keepUnacknowledgedFailures: false }
+  const applied = { revision: 1, autoSettleAfterDays: 3, keepUnacknowledgedFailures: true, keepUnacknowledgedResults: false, workspaceOverrides: {} }
+  const other = { revision: 1, autoSettleAfterDays: 30, keepUnacknowledgedFailures: false, keepUnacknowledgedResults: false, workspaceOverrides: {} }
   it.each([
     // The resend is the Host's answer, not the baseline: a baseline can predate a write still queued on the Host.
     ['committed', 'resend applies it', { ok: true as const, policy: applied }],
@@ -369,7 +372,7 @@ describe('HostBackend lost replies', () => {
   ] as const)('settles a lost policy reply by a CAS resend after the baseline: %s when %s', async (outcome, _why, reply) => {
     const backend = start()
     await ready(backend)
-    const write = backend.setPolicy(3, true)
+    const write = backend.setPolicy(draft(3, true))
     await flush()
     remote.policies[0]!.reply.reject(new Error('socket closed'))
     expect(await write).toMatchObject({ ok: false, code: 'UNCONFIRMED' })
@@ -409,7 +412,7 @@ describe('HostBackend lost replies', () => {
   it('recovers a policy write whose reply is lost only after the newer generation\'s baseline', async () => {
     const backend = start()
     await ready(backend)
-    const write = backend.setPolicy(3, true)
+    const write = backend.setPolicy(draft(3, true))
     await flush()
     resets.fire()
     remote.stream.push(baseline('e1', 2))

@@ -91,6 +91,21 @@ package.json
 
 ## 4. 数据模型
 
+### 4.0 契约 v1（C01 冻结，2026-11-12）
+
+**以 `src/contracts/schema.ts`（zod）与 `src/contracts/remote.ts`（Remote spec）为单一来源**；本节是它们的摘要，下文 4.1 起的 `TaskRecord`/`ActivitySummary`/`SignalBaseline` 草图与第 5 节的 API 表是 M0 前的设计稿，凡与本节冲突以本节为准。协议版本 `PROTOCOL_VERSION = 1`；Host 与 Client 同包发行，新增字段一律带默认值，旧存储无须迁移。
+
+| 实体 | v1 字段 | 与设计稿的差异 |
+| --- | --- | --- |
+| `ActivitySummary` | `lastUserInputAt`、`lastTurnStartAt`、`lastTurnStartSeq`、`lastTurnEnd{seq,at,reason}` | 由 Host 折叠 `session/event` 维护并持久化在记录内，不注册 `t3SidebarActivity` 投影（G0-C 结论）；无 `lineageBoundary`（fork 继承事件由读句柄 `inheritedEventCount` 跳过，`forked` 结束不计结果） |
+| `Disposition` | `normal`；`snoozed{until,setAt,baselinePending,baselineTurnEndSeq,baselineUserInputAt}`；`settled{reason: manual\|idle-timeout, enteredAt, baselineTurnStartSeq, baselineUserInputAt, baselinePending, anchorAt?, deadline?, policyRevision?}` | 基线拆为具名字段；`enteredAt` 即时间 Spec 的 `settledEnteredAt`（实际提交时刻，不回填） |
+| `TaskRecord` | `sessionId`、`revision`、`disposition`、`autoSettleHold{baselineUserInputAt,baselineTurnStartSeq}\|null`、`policyOverride: inherit\|disabled`、`policyEligibleSince`、`lastSnoozeWakeAt`、`activity`、`resultAcknowledgedSeq`、`receipts[{commandId,revision,digest}]`（每记录最近 16 条） | 无 `lastReturnAt/lastReturnToken/orderKey`；时间策略字段并入（第 9 节待对齐项 1）；`resultAcknowledgedSeq` 取代 `resultAcknowledgedToken`（同一会话 journal 的 turn-end seq，单调） |
+| `PendingSignal` | `{source, key, kind}`，key 只在同一 source 内比较 | 取代 `SignalToken`；浏览器观察只作下界 |
+| `TimePolicy` | `revision`、`autoSettleAfterDays: 1..90\|null`、`keepUnacknowledgedFailures`、`keepUnacknowledgedResults`、`workspaceOverrides{[workspaceId]: {mode:'off'}\|{mode:'custom',days}}` | v0.1 子集；PR/限额/自动归档字段属 v0.2/v0.3，未进入 schema |
+| `TaskView` | `sessionId`、`record`、`activity: string[]\|null`（Host 活动族）、`autoSettleDeadline`、`autoSettleSkip` | Host 发布的每会话视图 |
+| `Snapshot` / `FollowEvent` | baseline：`protocolVersion, installationId, epoch, streamSeq, dataRevision, serverNow, capabilities{hostActivity,sessionEvents,hostPending}, policy, tasks`；delta：`epoch, streamSeq, dataRevision, serverNow, tasks, policy\|null` | `facts` 不单独下发，由 `TaskView` 与 Client 实时状态合成 |
+
+
 ### 4.1 身份与快照
 
 `SessionId`、`WorkspaceId` 保持上游 opaque 类型。插件第一次初始化生成并持久化 `installationId`，作用域为这份 Host/profile 插件数据；浏览器缓存键为 `t3-sidebar:v1:<installationId>`。每次 Host 插件激活生成 `epoch`，Client 连接也带本地 generation。不能用工作目录名称、端口或浏览器提供的 userId 作为权威身份。
@@ -164,6 +179,34 @@ Host 待交互权威来自已装配的 approval/userQuestions 等公开 Host 能
 时间策略扩展 `policyOverride/autoSettleHold/settledEnteredAt/lastSnoozeWakeAt/policyEligibleSince/resultAcknowledgedToken` 等字段，见[时间策略 Spec](time-policy-spec.md)。共享 resultAcknowledgedToken 是 owner 主动确认结果的动作，区别于浏览器个人已读。
 
 ## 5. Host 命令、Remote 和持久化
+
+### 5.0 Remote 与存储 v1（C01 冻结）
+
+`ctx.remote.t3Sidebar` 实际方法（Client 以 `$mount` 挂载手写 Typert spec，Host 经 SRC 分派并用同一 zod schema 校验；Host 参数名带 `t3` 前缀，构建脚本校验与线名一致）：
+
+| 方法 | 输入 | 输出 / 语义 |
+| --- | --- | --- |
+| `getSnapshot` | `t3ProtocolVersion` | `Snapshot`；版本不符抛 `t3Sidebar/protocol-mismatch` |
+| `follow`（stream） | `t3ProtocolVersion`，AbortSignal | 先 baseline 后连续 delta；缓冲 1000，落后即结束流要求重订阅 |
+| `command` | `CommandInput{protocolVersion, commandId, sessionId, expectedRevision, action, observedPending}` | `action`：`snooze{until}` / `settle` / `reopen` / `policy-override{inherit\|disabled}` / `acknowledge-result{turnEndSeq}`。CAS + 收据幂等，返回权威 `TaskView` |
+| `setPolicy` | `PolicyInput{protocolVersion, expectedRevision, autoSettleAfterDays, keepUnacknowledgedFailures, keepUnacknowledgedResults?, workspaceOverrides?}` | revision CAS；省略的可选字段保留原值；按第 2 节规则启动受影响范围的宽限 |
+| `previewPolicy` | `{protocolVersion, draft: PolicyDraft\|null}` | 不写入：到期数、下一期限、跳过原因计数、被保留的结果（前 200 条）；草稿会模拟保存时将启动的宽限 |
+| `listTransitions` | `t3Limit` 1..1000 | 最近的状态迁移（无正文） |
+
+时间 Spec §7 的 6 个方法对应关系：`getPolicy` → snapshot/delta 的 `policy`；`setPolicy`、`previewPolicy`、`listTransitions` 同名；`setSessionPolicyOverride` → `command` 的 `policy-override`；`acknowledgeResult` → `command` 的 `acknowledge-result`（与其他任务命令共享 CAS、收据和错误码）。设计稿的 `setDisposition`/`reopen`/`refreshFacts` 合并进 `command`；`refreshFacts` 不提供，Host 自行有界采样活动（并发 2，退避）。
+
+错误码（`ErrorCodeSchema`）：`UNSUPPORTED_HOST`、`FORBIDDEN`、`NOT_FOUND`、`CONFLICT`、`SESSION_ACTIVE`、`PENDING_APPROVAL`、`PINNED`、`ARCHIVED`、`PENDING_INPUT`、`BASELINE_PENDING`、`INVALID_TIME`、`STORAGE_UNAVAILABLE`、`PROTOCOL_MISMATCH`；`UNCONFIRMED` 仅存在于 Client（回复丢失）。设计稿的 `PENDING_REQUEST` 未使用（非审批待交互统一为 `PENDING_INPUT`）。
+
+存储：自有 domain `t3_sidebar` v1，**不是**单个 state 记录（第 9 节待对齐项 3 的结论）：
+
+| 部分 | 内容 | 上限 |
+| --- | --- | --- |
+| `global` | `installationId`、`installedAt`、`dataRevision`、`policy`、`policyEligibleSince`（Host 默认规则宽限）、`seenRevisions`（每会话持久化变更 token）、`archivedSeen`、`workspaceEligibleSince`、`membership`（会话→工作区）、`sessionEligibleSince` | 按会话数线性；`sessionEligibleSince` 超过 90 天的项被清理 |
+| `tasks` 表 | 每会话一条 `TaskRecord`（含最近 16 条收据） | 只为有过命令或折叠事件的会话建记录 |
+| `transitions` 表 | 审计：`id, at, sessionId, from, to, reason, policyRevision, anchorAt, deadline` | 最近 1000 条，超出删最旧；尽力而为 |
+
+任务记录（含收据）是唯一权威写入；`dataRevision` 与审计在其后尽力写入，失败不回滚已提交的命令（见第 7 节）。
+
 
 新增 `ctx.remote.t3Sidebar` 的逻辑 API：
 

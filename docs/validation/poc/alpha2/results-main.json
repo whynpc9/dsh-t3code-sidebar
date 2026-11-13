@@ -1,0 +1,106 @@
+{
+  "phase": "main",
+  "at": "2026-11-12T15:28:41.048Z",
+  "results": [
+    {
+      "id": "N01.default-grouping-status",
+      "pass": true,
+      "detail": "status"
+    },
+    {
+      "id": "N02.header-composition",
+      "pass": true
+    },
+    {
+      "id": "F08.add-workspace",
+      "pass": true
+    },
+    {
+      "id": "A02.working-while-running",
+      "pass": true,
+      "detail": "{\"section\":\"working\",\"status\":\"running\"}"
+    },
+    {
+      "id": "N04.no-settle-while-running",
+      "pass": true
+    },
+    {
+      "id": "A02.completed-returns-active",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "F03.failure-visible",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "N03.empty-sections-hidden",
+      "pass": true,
+      "detail": "[\"active\",\"working\"]"
+    },
+    {
+      "id": "F03.tool-turn-observed",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "N09.arrow-key-navigation",
+      "pass": true,
+      "detail": "{\"start\":\"group:status:active\",\"down\":\"session:session-2be732a8-1259-4361-9605-96c3ce541461\",\"end\":\"session:session-2e9bb487-974c-4c30-ab3f-27134f42a9c8\",\"home\":\"group:status:active\"}"
+    },
+    {
+      "id": "N10.group-actions-keyboard",
+      "pass": true,
+      "detail": "Workspace actions for ws"
+    },
+    {
+      "id": "N05.archive-in-more-menu",
+      "pass": true
+    },
+    {
+      "id": "F04.snooze",
+      "pass": true,
+      "detail": "{\"section\":\"snoozed\",\"status\":\"idle\"}"
+    },
+    {
+      "id": "N06.settle-button",
+      "pass": true,
+      "detail": "{\"section\":\"settled\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "A06.second-window-baseline",
+      "pass": true,
+      "detail": "{\"a\":{\"section\":\"snoozed\",\"status\":\"new-result\"},\"b\":{\"section\":\"settled\",\"status\":\"failed\"}}"
+    },
+    {
+      "id": "N07.unsettle-button",
+      "pass": true
+    },
+    {
+      "id": "A06.second-window-delta",
+      "pass": true,
+      "detail": "{\"section\":\"active\",\"status\":\"failed\"}"
+    },
+    {
+      "id": "F01.grouping-remembered",
+      "pass": true,
+      "detail": "flat"
+    },
+    {
+      "id": "N08.settings-under-plugins",
+      "pass": true
+    },
+    {
+      "id": "A11.single-winner",
+      "pass": true
+    }
+  ],
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

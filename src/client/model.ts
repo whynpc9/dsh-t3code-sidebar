@@ -6,10 +6,11 @@
  * a session is placed identically everywhere.
  */
 import { derivePlacement, rowStatus, type RowStatus } from '../domain/placement.ts'
+import { effectivePolicy, heldResult } from '../domain/policy.ts'
 import { comparatorFor, type SortInput } from '../domain/sort.ts'
 import {
   EMPTY_ACTIVITY, PLACEMENTS, known, unknown,
-  type NativeState, type PendingSignal, type Placement, type TaskFacts, type TaskRecord,
+  type NativeState, type PendingSignal, type Placement, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
 import type { TaskView } from '../contracts/schema.ts'
 
@@ -92,6 +93,13 @@ export interface ModelInputs {
   readonly tasks: ReadonlyMap<string, TaskView>
   readonly lastSeen: Readonly<Record<string, number>>
   readonly now: number
+  /**
+   * The Host is connected and answers activity: it publishes a view for every
+   * session with background work (or whose activity it could not read), so a
+   * session without a view has nothing beyond its own turn. Without this
+   * (browser-only preview, connecting) a missing view stays unknown.
+   */
+  readonly hostActivity?: boolean
 }
 
 /** Pending interactions this browser can see (live winner + durable asks). */
@@ -107,7 +115,7 @@ export function pendingOf(session: SessionRow, status: SessionStatusEntry | unde
 }
 
 export function buildRows(inputs: ModelInputs): Row[] {
-  const { sessions, workspaces, status, tasks, lastSeen, now } = inputs
+  const { sessions, workspaces, status, tasks, lastSeen, now, hostActivity = false } = inputs
   const pinned = new Map(workspaces.pinnedSessionIds.map((id, index) => [id, index]))
   const archived = new Set(workspaces.archivedSessionIds)
   const owner = new Map<string, WorkspaceRow>()
@@ -130,9 +138,11 @@ export function buildRows(inputs: ModelInputs): Row[] {
       pending: known(pendingSignals),
       // The browser's live `running` is authoritative for the session's own turn;
       // the Host adds the families only it can see (subagents, jobs, schedules).
-      activity: view?.activity === null || view?.activity === undefined
-        ? unknown
-        : known(view.activity.filter(kind => kind !== 'turn').concat(running ? ['turn'] : [])),
+      activity: view === undefined
+        ? (hostActivity ? known(running ? ['turn'] : []) : unknown)
+        : view.activity === null
+          ? unknown
+          : known(view.activity.filter(kind => kind !== 'turn').concat(running ? ['turn'] : [])),
       summary: record?.activity ?? EMPTY_ACTIVITY,
     }
     const native: NativeState = { pinned: pinned.has(id), archived: archived.has(id) }
@@ -410,4 +420,45 @@ export function nextFocusIndex(key: string, index: number, count: number): numbe
     case 'End': return count - 1
     default: return null
   }
+}
+
+/**
+ * The keep-unacknowledged protection holding this session's latest result,
+ * when automatic settling applies to it at all (its effective rule is on and
+ * the session is not exempt); null otherwise.
+ */
+export function heldResultOf(
+  row: Pick<Row, 'record' | 'workspaceId'>, policy: TimePolicy,
+): { readonly reason: 'unacknowledged-failure' | 'unacknowledged-result'; readonly turnEndSeq: number } | null {
+  const record = row.record
+  if (record === undefined || record.policyOverride === 'disabled') return null
+  if (effectivePolicy(policy, row.workspaceId).days === null) return null
+  const reason = heldResult(policy, record.activity, record.resultAcknowledgedSeq)
+  const end = record.activity.lastTurnEnd
+  return reason === null || end === null ? null : { reason, turnEndSeq: end.seq }
+}
+
+/** Whether automatic settling can apply to this session's scope (its effective rule is on). */
+export function autoSettleApplies(row: Pick<Row, 'workspaceId'>, policy: TimePolicy): boolean {
+  return effectivePolicy(policy, row.workspaceId).days !== null
+}
+
+/**
+ * Rows the one-list grouping renders at first and per growth step. Native
+ * renders every row; past ~200 rows that costs hundreds of milliseconds per
+ * view switch (Q02), so the list renders a window that grows on scroll and
+ * always reaches the current session.
+ */
+export const FLAT_WINDOW = 200
+
+/** The rendered prefix of the one-list rows: at least `limit` rows and through the current session. */
+export function flatWindow(rows: readonly Row[], limit: number): { readonly rows: readonly Row[]; readonly hiddenCount: number } {
+  const current = rows.findIndex(row => row.current)
+  const end = Math.min(rows.length, Math.max(limit, current + 1))
+  return { rows: rows.slice(0, end), hiddenCount: rows.length - end }
+}
+
+/** Whether rows may treat a session without a Host view as having no background work (see `ModelInputs.hostActivity`). */
+export function hostActivityKnown(backend: { readonly kind: string; readonly status: string; readonly capabilities: { readonly hostActivity: boolean } }): boolean {
+  return backend.kind === 'host' && backend.status === 'ready' && backend.capabilities.hostActivity
 }

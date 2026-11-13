@@ -5,12 +5,17 @@
 //   contains "#slow" → streams text for ~SLOW_MS (keeps the turn running)
 //   contains "#fail" → HTTP 400 (the turn ends with an error)
 //   contains "#bash" → requests one bash tool call (approval under "ask"), then answers
+//   contains "#askbash" → requests a bash call marked `approval-fixture`
+//     (with tests/fixtures/approval-gate installed it waits for approval)
+//   contains "#delaybash" → waits ~DELAY_MS, then requests the marked bash call
+//     (a turn that is running first and asks for approval later)
 //   otherwise        → a short reply that ends the turn
 // Markers are explicit because Harness appends runtime context to user turns.
 import { createServer } from 'node:http'
 
 const port = Number(process.argv[2] ?? 47900)
 const SLOW_MS = Number(process.env.MOCK_SLOW_MS ?? 20000)
+const DELAY_MS = Number(process.env.MOCK_DELAY_MS ?? 8000)
 
 const lastUserText = (body) => {
   for (let i = body.messages.length - 1; i >= 0; i -= 1) {
@@ -41,10 +46,10 @@ async function streamText(res, model, text, delayMs) {
   res.end()
 }
 
-function streamToolUse(res, model) {
+function streamToolUse(res, model, command = 'echo sidebar-fixture > fixture.txt') {
   sse(res, 'message_start', { message: { id: `msg_${Date.now()}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } })
   sse(res, 'content_block_start', { index: 0, content_block: { type: 'tool_use', id: `toolu_${Date.now()}`, name: 'bash', input: {} } })
-  sse(res, 'content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: 'echo sidebar-fixture > fixture.txt', description: 'write a fixture file' }) } })
+  sse(res, 'content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command, description: 'write a fixture file' }) } })
   sse(res, 'content_block_stop', { index: 0 })
   sse(res, 'message_delta', { delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 } })
   sse(res, 'message_stop', {})
@@ -72,6 +77,9 @@ const server = createServer((req, res) => {
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
     if (/#bash\b/.test(text) && !toolResult) { streamToolUse(res, model); return }
+    const marked = 'echo approval-fixture > approval.txt'
+    if (/#askbash\b/.test(text) && !toolResult) { streamToolUse(res, model, marked); return }
+    if (/#delaybash\b/.test(text) && !toolResult) { await sleep(DELAY_MS); streamToolUse(res, model, marked); return }
     if (/#slow\b/.test(text) && !toolResult) {
       const words = Array.from({ length: 40 }, (_, i) => `step${i}`).join(' ')
       await streamText(res, model, words, SLOW_MS / 40)

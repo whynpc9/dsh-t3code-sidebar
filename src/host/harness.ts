@@ -32,6 +32,12 @@ export interface HostSessionActivity {
 export interface HostWorkspaceRegistry {
   readonly pinnedSessionIds: readonly string[]
   readonly archivedSessionIds: readonly string[]
+  /**
+   * Synchronous workspace projection in registry order. A session belongs to
+   * at most one workspace: membership requires its header cwd to equal the
+   * workspace's canonical path, and canonical paths are unique.
+   */
+  list?(): readonly { readonly id: string; readonly sessionIds: readonly string[] }[]
 }
 
 /** A `read` handle onto one stored session's append-only event log. */

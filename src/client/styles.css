@@ -381,6 +381,11 @@
   position: relative;
 }
 
+/* Marks the end of the rendered part of the one list (it grows on scroll). */
+.t3sb-grow-sentinel {
+  height: 1px;
+}
+
 .t3sb-group + .t3sb-group {
   margin-top: 4px;
 }
@@ -1002,6 +1007,56 @@
 
 .t3sb-muted {
   color: var(--dsw-alias-label-secondary);
+}
+
+.t3sb-warning {
+  margin-top: 8px;
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
+}
+
+.t3sb-settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+.t3sb-settings h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.t3sb-settings-workspace {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.t3sb-settings-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.t3sb-select {
+  box-sizing: border-box;
+  height: 32px;
+  max-width: 220px;
+  padding: 4px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.t3sb-select:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -1px;
 }
 
 @media (pointer: coarse) {

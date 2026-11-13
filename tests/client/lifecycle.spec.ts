@@ -14,7 +14,8 @@ import {
 import type { Snapshot } from '../../src/contracts/schema.ts'
 import type { Runtime } from '../../src/client/runtime.ts'
 import { createStore, type Readable } from '../../src/client/store.ts'
-import { baseline, deferred, FakeRemote, flush, snapshot } from './remote-fakes.ts'
+import { EMPTY_ACTIVITY, emptyRecord } from '../../src/domain/types.ts'
+import { baseline, deferred, FakeRemote, flush, POLICY, snapshot } from './remote-fakes.ts'
 
 const NAMESPACE = 't3Sidebar'
 
@@ -45,6 +46,11 @@ interface Env {
   unmounts: number
   /** `sidebar.workspaces` registrations. */
   slots: Set<{ inject: () => { runtime: Runtime } }>
+  /** Other plugins' `sidebar.workspaces` entries (the native browser, rivals). */
+  foreign: { component: unknown; options: { priority?: number }; inject?: () => Record<string, unknown>; registrant?: string }[]
+  /** Live `slots.subscribe` listeners. */
+  slotListeners: Set<() => void>
+  notifySlots(): void
   /** Other slot registrations (the settings page under Plugins). */
   pages: Set<{ name: string; key?: string }>
   menus: Set<unknown>
@@ -62,7 +68,7 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
   const root = new Context()
   const env = {
     root, nextApi, apis: [] as FakeRemote[], mounts: 0, unmounts: 0,
-    slots: new Set(), pages: new Set(), menus: new Set(), locales: 0,
+    slots: new Set(), pages: new Set(), menus: new Set(), locales: 0, foreign: [], slotListeners: new Set(),
     status: counted(new Map<string, { running?: boolean }>()),
     sessions: counted({ byId: {}, items: [] }),
     workspaces: counted({ items: [], pinnedSessionIds: [], archivedSessionIds: [] }),
@@ -78,12 +84,26 @@ function createEnv(nextApi: () => FakeRemote | null): Env {
         return () => { dispose?.() }
       })
     }
-    register(options: { name: string; key?: string; inject: () => { runtime: Runtime } }) {
+    register(options: { name: string; key?: string; inject: () => { runtime: Runtime } }, component?: unknown) {
       const ledger: Set<unknown> = options.name === 'sidebar.workspaces' ? env.slots : env.pages
-      ledger.add(options)
-      return () => { ledger.delete(options) }
+      const stored = { ...options, component }
+      ledger.add(stored)
+      env.notifySlots()
+      return () => { ledger.delete(stored); env.notifySlots() }
+    }
+    entries(key: string) {
+      if (key !== 'sidebar.workspaces') return []
+      return [...env.slots as Set<{ priority?: number; component?: unknown; inject: () => Record<string, unknown> }>]
+        .map((entry): Env['foreign'][number] => ({ component: entry.component, options: { priority: entry.priority }, inject: entry.inject }))
+        .concat(env.foreign)
+        .sort((left, right) => (left.options.priority ?? 0) - (right.options.priority ?? 0))
+    }
+    subscribe(_key: string, listener: () => void) {
+      env.slotListeners.add(listener)
+      return () => { env.slotListeners.delete(listener) }
     }
   }
+  env.notifySlots = () => { for (const listener of [...env.slotListeners]) listener() }
   root.plugin(Slots)
 
   // Like the real Remote: one namespace service shared by every mount of it.
@@ -170,10 +190,11 @@ function footprint(env: Env) {
     sessions: env.sessions.live,
     workspaces: env.workspaces.live,
     openStreams: env.apis.flatMap(api => api.streams).filter(stream => !stream.aborted).length,
+    slotListeners: env.slotListeners.size,
   }
 }
 
-const EMPTY = { mounted: 0, slots: 0, pages: 0, menus: 0, locales: 0, status: 0, sessions: 0, workspaces: 0, openStreams: 0 }
+const EMPTY = { mounted: 0, slots: 0, pages: 0, menus: 0, locales: 0, status: 0, sessions: 0, workspaces: 0, openStreams: 0, slotListeners: 0 }
 
 afterEach(async () => {
   vi.useRealTimers()
@@ -195,7 +216,7 @@ describe('client lifecycle on a real Cordis context', () => {
       await fiber
       await settle()
       expect(backendOf(env)).toMatchObject({ kind: 'host', status: 'ready' })
-      expect(footprint(env)).toMatchObject({ mounted: 1, slots: 1, pages: 1, menus: 1, locales: 1, openStreams: 1 })
+      expect(footprint(env)).toMatchObject({ mounted: 1, slots: 1, pages: 1, menus: 1, locales: 1, openStreams: 1, slotListeners: 1 })
       expect([...env.pages]).toEqual([expect.objectContaining({ name: 'plugins.bundle.config', key: 'dsh-t3code-sidebar' })])
       await fiber.dispose()
       await settle()
@@ -420,5 +441,77 @@ describe('connectHostBackend failure paths', () => {
     backend.dispose()
     await settle(1)
     expect(counts).toEqual({ mounts: 1, unmounts: 1, injects: 1, released: 1 })
+  })
+})
+
+describe('slot registry and session menu on a real Cordis context', () => {
+  const runtimeOf = (env: Env): Runtime => [...env.slots][0]!.inject().runtime
+
+  it('bridges the native ⌘K / ⌘O requests, reports a rival winner, and releases its subscriptions', async () => {
+    const env = createEnv(() => hostApi())
+    const shortcuts = counted({ searchRequest: 0, addRequested: false, directoryBusy: false, renameTarget: null })
+    const closeAddWorkspace = vi.fn(() => { shortcuts.set({ ...shortcuts.getSnapshot(), addRequested: false }) })
+    env.foreign.push({ component: 'WorkspaceBrowser', options: {}, registrant: 'ui-workspace', inject: () => ({ closeAddWorkspace, hooks: { workspaceShortcuts: shortcuts } }) })
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const fiber = env.root.plugin(plugin)
+      await fiber
+      await settle()
+      const runtime = runtimeOf(env)
+      expect(runtime.slotStatus.getSnapshot()).toEqual({ known: true, active: true, winner: null })
+      shortcuts.set({ ...shortcuts.getSnapshot(), searchRequest: cycle + 1, addRequested: true })
+      expect(runtime.shortcutRequests.getSnapshot()).toEqual(expect.objectContaining({ searchRequest: cycle + 1, addRequested: true }))
+      runtime.closeAddRequest()
+      expect(runtime.shortcutRequests.getSnapshot().addRequested).toBe(false)
+      env.foreign.push({ component: 'Rival', options: { priority: -20 }, registrant: 'rival-plugin' })
+      env.notifySlots()
+      expect(runtime.slotStatus.getSnapshot()).toEqual({ known: true, active: false, winner: 'rival-plugin' })
+      env.foreign.pop()
+      env.notifySlots()
+      await fiber.dispose()
+      await settle()
+      expect(footprint(env)).toEqual(EMPTY)
+      expect(shortcuts.live).toBe(0)
+    }
+    expect(closeAddWorkspace).toHaveBeenCalledTimes(20)
+  })
+
+  it('offers "Acknowledge result" for a result a keep protection holds, and sends it as a command', async () => {
+    const env = createEnv(() => hostApi(async () => ({
+      ok: true,
+      value: snapshot('e1', 0, [{
+        sessionId: 's1',
+        record: { ...emptyRecord('s1', 0), revision: 2, activity: { ...EMPTY_ACTIVITY, lastTurnEnd: { seq: 4, at: 1, reason: 'error' } } },
+        activity: [], autoSettleDeadline: null, autoSettleSkip: 'unacknowledged-failure',
+      }], { ...POLICY, keepUnacknowledgedFailures: true }),
+    })))
+    ;(env.sessions as unknown as { set(value: unknown): void }).set({
+      ids: ['s1'], byId: { s1: { id: 's1', displayTitle: 'one', title: 'one', running: false, blank: false, updatedAt: Date.now() } }, phase: 'ready',
+    })
+    ;(env.workspaces as unknown as { set(value: unknown): void }).set({ items: [], pinnedSessionIds: [], archivedSessionIds: [], phase: 'ready' })
+    const fiber = env.root.plugin(plugin)
+    await fiber
+    await settle()
+    const menu = [...env.menus][0] as { resolve(target: { sessionId: string }): { id: string; run?: () => void }[] }
+    const item = menu.resolve({ sessionId: 's1' }).find(entry => entry.id === 'acknowledge')
+    expect(item).toBeDefined()
+    item!.run!()
+    await settle()
+    expect(env.apis[0]!.commands.map(entry => entry.input['action'])).toEqual([{ kind: 'acknowledge-result', turnEndSeq: 4 }])
+    // Without a keep protection the item is not offered.
+    const plain = createEnv(() => hostApi(async () => ({
+      ok: true,
+      value: snapshot('e1', 0, [{
+        sessionId: 's1',
+        record: { ...emptyRecord('s1', 0), revision: 2, activity: { ...EMPTY_ACTIVITY, lastTurnEnd: { seq: 4, at: 1, reason: 'error' } } },
+        activity: [], autoSettleDeadline: null, autoSettleSkip: null,
+      }]),
+    })))
+    ;(plain.sessions as unknown as { set(value: unknown): void }).set(env.sessions.getSnapshot())
+    ;(plain.workspaces as unknown as { set(value: unknown): void }).set(env.workspaces.getSnapshot())
+    await plain.root.plugin(plugin)
+    await settle()
+    const plainMenu = [...plain.menus][0] as { resolve(target: { sessionId: string }): { id: string }[] }
+    expect(plainMenu.resolve({ sessionId: 's1' }).map(entry => entry.id)).not.toContain('acknowledge')
+    await fiber.dispose()
   })
 })

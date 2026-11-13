@@ -2,10 +2,11 @@
  * The object the Client `apply` hands to the slot components: observable
  * sources plus actions. Components never touch `ctx` directly.
  */
-import type { CommandAction } from '../contracts/schema.ts'
-import type { BackendState, CommandOutcome, PolicyOutcome } from './backend.ts'
+import type { CommandAction, PolicyPreview } from '../contracts/schema.ts'
+import type { BackendState, CommandOutcome, PolicyDraft, PolicyOutcome } from './backend.ts'
 import type { Key } from './locales.ts'
 import type { ArchivedFilter, ContentHit, GroupBy, SessionsSnapshot, StatusSnapshot, WorkspacesSnapshot } from './model.ts'
+import type { ShortcutRequests, SlotStatus } from './native-bridge.ts'
 import type { Readable, Store } from './store.ts'
 
 export interface Prefs {
@@ -100,8 +101,10 @@ export interface Runtime {
   /** The row "…" button: open the session menu, or close it when it is already open for this session. */
   toggleSessionMenu(sessionId: string, displayTitle: string, point: { x: number; y: number }): void
   command(sessionId: string, action: CommandAction): Promise<CommandOutcome>
-  setPolicy(days: number | null, keepFailures: boolean): Promise<PolicyOutcome>
+  setPolicy(draft: PolicyDraft): Promise<PolicyOutcome>
   listTransitions(limit: number): Promise<readonly Transition[]>
+  /** Host evaluation of the stored policy (null) or a draft; null without the Host. */
+  previewPolicy(draft: PolicyDraft | null): Promise<PolicyPreview | null>
   search(query: string, signal: AbortSignal): Promise<SearchPage>
   createWorkspace(path: string): Promise<void>
   renameWorkspace(workspaceId: string, title: string): Promise<void>
@@ -115,4 +118,10 @@ export interface Runtime {
   /** Snooze-with-custom-time requests raised from the context menu. */
   readonly snoozeRequest: Store<string | null>
   readonly notice: Store<{ readonly text: string; readonly seq: number } | null>
+  /** Whether this plugin's registration renders `sidebar.workspaces` (S01 diagnostics). */
+  readonly slotStatus: Readable<SlotStatus>
+  /** ⌘K / ⌘O requests raised by the native workspace commands. */
+  readonly shortcutRequests: Readable<ShortcutRequests>
+  /** Clear the native add-workspace request once handled. */
+  closeAddRequest(): void
 }

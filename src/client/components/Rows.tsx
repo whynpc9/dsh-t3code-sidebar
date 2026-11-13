@@ -15,7 +15,7 @@ import { settle } from '../../domain/commands.ts'
 import { DAY_MS, emptyRecord } from '../../domain/types.ts'
 import type { RowStatus } from '../../domain/placement.ts'
 import type { Key } from '../locales.ts'
-import type { Row } from '../model.ts'
+import { heldResultOf, type Row } from '../model.ts'
 import type { Runtime } from '../runtime.ts'
 
 export const cx = (...names: readonly (string | false | null | undefined)[]): string => names.filter(Boolean).join(' ')
@@ -184,6 +184,8 @@ function SessionHoverContent({ row, env }: { row: Row; env: RowEnv }) {
   const { t, now } = env
   const status = statusOf(row, t)
   const task = taskLine(row, t, now)
+  const backend = env.runtime.backend.getSnapshot()
+  const held = backend.kind === 'host' && heldResultOf(row, backend.policy) !== null
   return (
     <div className="t3sb-hover-content">
       <div className="t3sb-hover-title">{displayTitle(row, t)}</div>
@@ -193,6 +195,7 @@ function SessionHoverContent({ row, env }: { row: Row; env: RowEnv }) {
       {row.record?.policyOverride === 'disabled' && !row.native.archived && (
         <div className="t3sb-hover-task">{t('hover.autoSettleOff')}</div>
       )}
+      {held && !row.native.archived && row.placement !== 'settled' && <div className="t3sb-hover-task">{t('hover.held')}</div>}
       {status !== null && !row.native.archived && (
         <div className="t3sb-hover-status"><StateDot state={status.state} /><span>{status.label}</span></div>
       )}
