@@ -14,7 +14,7 @@ export const Switch = ({ checked, disabled, onChange, label }: { checked: boolea
 export const Button = ({ children, disabled, onClick }: { children?: ReactNode; disabled?: boolean; onClick?: () => void }) =>
   <button type="button" disabled={disabled} onClick={onClick}>{children}</button>
 export const Input = ({ size: _size, ...props }: InputHTMLAttributes<HTMLInputElement> & { size?: unknown }) => <input {...props} />
-export const Modal = Passthrough
+export const Modal = ({ children, footer }: { children?: ReactNode; footer?: ReactNode }) => <>{children}{footer}</>
 export const Tooltip = Passthrough
 export const HoverCardGroup = Passthrough
 export const HoverCard = Anchor
