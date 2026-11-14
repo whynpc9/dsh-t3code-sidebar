@@ -128,6 +128,46 @@ describe('search (A07)', () => {
 describe('keyboard navigation (A08)', () => {
   const sessions = [session('s1'), session('s2'), session('s3')]
 
+  it('locates the current session after a search excludes it without reopening the conversation', async () => {
+    const runtime = fakeRuntime({ sessions: [session('s1', { retainedBy: { mainView: 1 } }), session('s2')] })
+    const view = render(runtime)
+    type(searchInput(view), 'Title s2')
+    await wait(300)
+    expect(resultIds(view)).toEqual(['s2'])
+    const locate = [...view.querySelectorAll('button')].find(button => button.textContent === 'locate.action')!
+    locate.focus()
+    act(() => { locate.click() })
+    expect(searchInput(view).value).toBe('')
+    expect(focusedKey()).toBe('session:s1')
+    expect(runtime.open).not.toHaveBeenCalled()
+  })
+
+  it('locates an active session outside an archived-only filter and opens its collapsed workspace', () => {
+    const runtime = fakeRuntime({
+      sessions: [session('s1', { retainedBy: { mainView: 1 } })],
+      workspaces: [{ workspaceId: 'ws', path: '/test', title: 'Test', sessionIds: ['s1'] }],
+      prefs: { groupBy: 'workspace', archivedFilter: 'only', collapsed: { 'workspace:ws': true } },
+    })
+    const view = render(runtime)
+    const locate = [...view.querySelectorAll('button')].find(button => button.textContent === 'locate.action')!
+    act(() => { locate.click() })
+    expect(runtime.prefs.getSnapshot()).toMatchObject({ archivedFilter: 'default', collapsed: { 'workspace:ws': false } })
+    expect(focusedKey()).toBe('session:s1')
+    expect(view.querySelectorAll('[data-session-id="s1"]')).toHaveLength(1)
+  })
+
+  it('returns focus to the session actions after cancelling custom Snooze', async () => {
+    const runtime = fakeRuntime({ sessions })
+    const view = render(runtime)
+    act(() => { runtime.snoozeRequest.set('s2') })
+    const cancel = [...view.querySelectorAll('button')].find(button => button.textContent === 'snooze.cancel')!
+    act(() => { cancel.click() })
+    await wait(40)
+    expect(runtime.snoozeRequest.getSnapshot()).toBeNull()
+    expect(document.activeElement).toBe(view.querySelector('[data-session-id="s2"] [data-action="more"]'))
+    expect(runtime.command).not.toHaveBeenCalled()
+  })
+
   it('moves between group headers and rows with the arrow keys, Home and End', () => {
     const runtime = fakeRuntime({ sessions })
     const view = render(runtime)

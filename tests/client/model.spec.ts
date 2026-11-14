@@ -147,6 +147,13 @@ describe('watermark', () => {
     expect(requiredWatermark(make(8))).toBe(WATERMARK_BASE)
     expect(requiredWatermark(make(12, [9]))).toBe(10)
   })
+
+  it('keeps the current session visible past the automatic watermark cap', () => {
+    const rows = make(60).map((row, index) => index === 55 ? { ...row, current: true } : row)
+    const shown = watermarkRows(rows, requiredWatermark(rows))
+    expect(shown.rows.map(row => row.sessionId)).toEqual(['s0', 's1', 's2', 's3', 's4', 's55'])
+    expect(shown.hiddenCount).toBe(54)
+  })
 })
 
 describe('search', () => {

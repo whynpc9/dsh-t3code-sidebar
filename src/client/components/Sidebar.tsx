@@ -6,7 +6,7 @@
  * results. The rail (collapsed sidebar) keeps search and add workspace as
  * 36px controls. Settings live on this plugin's page under Plugins.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import {
   AnimatedRows, HoverCardGroup, IconAlarmClockOutlineRegular, IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular,
   IconArchiveOutlineRegular, IconCheckCircleOutlineRegular, IconChecklistOutlineRegular, IconCloseFillRegular,
@@ -16,7 +16,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Key } from '../locales.ts'
 import {
-  buildRows, FLAT_WINDOW, hostActivityKnown, flatRows, flatWindow, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, FLAT_WINDOW, hostActivityKnown, flatRows, flatWindow, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, visibleUnder, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ArchivedFilter, type ContentHit, type GroupBy, type Row, type SectionKey,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
@@ -191,6 +191,10 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
 
   // ── Search (native composition: the icon expands into the input) ──
   const [query, setQuery] = useState('')
+  const [locateTarget, setLocateTarget] = useState<string | null>(null)
+  const listArea = useRef<HTMLDivElement | null>(null)
+  const searchButton = useRef<HTMLButtonElement | null>(null)
+  const [snoozeFocusTarget, setSnoozeFocusTarget] = useState<string | null>(null)
   const [searchExpanded, setSearchExpanded] = useState(false)
   const [searchMotion, setSearchMotion] = useState(false)
   const [searchOnExpand, setSearchOnExpand] = useState(false)
@@ -304,6 +308,58 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     setCollapsed(currentWorkspaceKey, false)
   }, [groupBy, currentWorkspaceKey])
 
+  const locateCurrent = () => {
+    if (current === undefined) return
+    clearSearch()
+    if (!visibleUnder(current, archivedFilter)) {
+      setPrefs({ archivedFilter: current.native.archived ? 'show' : 'default' })
+    }
+    if (groupBy === 'workspace' && currentWorkspaceKey !== undefined && isCollapsed(currentWorkspaceKey, true)) {
+      setCollapsed(currentWorkspaceKey, false)
+    }
+    setLocateTarget(current.sessionId)
+  }
+
+  useLayoutEffect(() => {
+    if (locateTarget === null || !wide || normalizedQuery !== '') return
+    const selected = listArea.current?.querySelectorAll<HTMLElement>('.t3sb-session-row[aria-selected="true"]') ?? []
+    const row = Array.from(selected).find(element => element.dataset['sessionId'] === locateTarget)
+    if (row !== undefined) {
+      row.focus({ preventScroll: true })
+      row.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+    }
+    setLocateTarget(null)
+  }, [locateTarget, normalizedQuery, wide])
+
+  const closeSnooze = (sessionId: string) => {
+    if (runtime.snoozeRequest.getSnapshot() !== sessionId) return
+    setSnoozeFocusTarget(sessionId)
+    runtime.snoozeRequest.set(null)
+  }
+
+  useEffect(() => {
+    if (snoozeFocusTarget === null || snoozeTarget !== null) return
+    // Wait for the host modal to release its focus trap before restoring focus.
+    const frame = requestAnimationFrame(() => {
+      const rows = listArea.current?.querySelectorAll<HTMLElement>('.t3sb-session-row[data-session-id]') ?? []
+      const row = Array.from(rows).find(element => element.dataset['sessionId'] === snoozeFocusTarget)
+      const trigger = row?.querySelector<HTMLElement>('[data-action="more"]')
+      trigger?.focus({ preventScroll: true })
+      if (document.activeElement !== trigger) {
+        (row ?? searchButton.current)?.focus({ preventScroll: true })
+      }
+      setSnoozeFocusTarget(null)
+    })
+    return () => { cancelAnimationFrame(frame) }
+  }, [snoozeFocusTarget, snoozeTarget])
+
+  const locateNotice = (
+    <div className="t3sb-locate">
+      <span>{t('locate.hidden')}</span>
+      <button type="button" className="t3sb-empty-action" onClick={locateCurrent}>{t('locate.action')}</button>
+    </div>
+  )
+
   const rowKeys: string[] = []
   const required: Record<string, number> = {}
   /** Session rows of one expanded group, capped by its watermark, plus the Show more / Show less control. */
@@ -416,6 +472,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     }
   }
   if (empty) rowKeys.unshift('empty')
+  const currentInList = current === undefined || rowKeys.includes(`session:${current.sessionId}`)
 
   const listReady = sessions.phase === 'ready' && workspaces.phase === 'ready'
   const label = groupBy === 'workspace' ? t('header.workspaces') : t('header.sessions')
@@ -427,6 +484,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     return (
       <div className="t3sb-tree-body t3sb-wide">
         <div className="t3sb-list">
+          {current !== undefined && !pending && !results.some(result => result.row.sessionId === current.sessionId) && locateNotice}
           <div className="t3sb-search-tree" role="tree" aria-label={t('search.results')}>
             {results.map(result => (
               <SearchResultRow key={result.row.sessionId} row={result.row} snippet={result.snippet} place={result.place}
@@ -486,7 +544,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
             <div ref={searchRoot} className={cx('t3sb-search', searchExpanded && 't3sb-search-expanded')}
               onClick={() => { changeSearchExpanded(true); focusSearch() }}>
               <Tooltip label={t('search.tooltip')} side="bottom" delayMs={500} disabled={searchExpanded} portal>
-                <button type="button" className="t3sb-search-button" aria-label={t('search.open')} aria-expanded={searchExpanded}
+                <button ref={searchButton} type="button" className="t3sb-search-button" aria-label={t('search.open')} aria-expanded={searchExpanded}
                   data-testid="t3-search" onClick={() => { changeSearchExpanded(true) }}>
                   <IconSearchOutlineRegular size={searchExpanded ? 11 : 14} />
                 </button>
@@ -520,7 +578,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
       {!wide && (
         <div className="t3sb-search">
           <Tooltip label={t('search.tooltip')} portal>
-            <button type="button" className="t3sb-search-button" aria-label={t('search.open')}
+            <button ref={searchButton} type="button" className="t3sb-search-button" aria-label={t('search.open')}
               onClick={() => { setSearchOnExpand(true); expandSidebar?.() }}>
               <IconSearchOutlineRegular size={18} />
             </button>
@@ -535,9 +593,10 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         </div>
       )}
 
-      <div className="t3sb-list-area" onKeyDown={onListKeyDown}>
+      <div ref={listArea} className="t3sb-list-area" onKeyDown={onListKeyDown}>
         {wide && (normalizedQuery !== '' ? searchView() : (
           <HoverCardGroup className="t3sb-tree-body t3sb-wide">
+            {!currentInList && locateNotice}
             <AnimatedRows className={cx('t3sb-list', groupBy === 'flat' && 't3sb-flat-list')} role="tree" label={label}
               rowKeys={rowKeys} ready={listReady} resetKey={JSON.stringify([groupBy, archivedFilter, motionKey])}>
               {empty && <EmptySessions archivedOnly={archivedOnly} onLeaveArchivedOnly={leaveArchivedOnly} t={t} />}
@@ -548,7 +607,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         ))}
       </div>
 
-      {snoozeTarget !== null && <SnoozeDialog key={snoozeTarget} runtime={runtime} sessionId={snoozeTarget} now={now} />}
+      {snoozeTarget !== null && <SnoozeDialog key={snoozeTarget} runtime={runtime} sessionId={snoozeTarget} now={now}
+        onClose={() => { closeSnooze(snoozeTarget) }} />}
       {workspaceDialog?.kind === 'add' && <AddWorkspaceDialog runtime={runtime} onClose={() => { setWorkspaceDialog(null) }} />}
       {workspaceDialog?.kind === 'rename' && (
         <RenameWorkspaceDialog runtime={runtime} workspaceId={workspaceDialog.workspaceId} title={workspaceDialog.title} onClose={() => { setWorkspaceDialog(null) }} />

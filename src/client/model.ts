@@ -307,13 +307,13 @@ export const WATERMARK_BASE = 5
 /** Highest watermark attention rows raise automatically. */
 export const WATERMARK_AUTO_MAX = 50
 
-/** The blank row plus the first `watermark` non-blank rows, in list order. */
+/** The blank row, first `watermark` non-blank rows and current session, in list order. */
 export function watermarkRows(rows: readonly Row[], watermark: number): { rows: readonly Row[]; hiddenCount: number } {
   let count = 0
   const shown = rows.filter((row) => {
     if (row.blank) return true
     count += 1
-    return count <= watermark
+    return count <= watermark || row.current
   })
   return { rows: shown, hiddenCount: rows.length - shown.length }
 }

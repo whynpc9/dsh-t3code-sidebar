@@ -39,7 +39,7 @@
 | A07 搜索竞态 / A08 键盘 | 自动化 | `tests/client/sidebar.spec.tsx`（真实 DOM）+ e2e N09 |
 | A10 权限撤回 / guest | **通过（Web，隔离 Gateway 夹具）** | guest 默认原生侧栏；撤权后关闭任务视图、拒绝读写和后续流帧；未知写入被拒；任务 API 关闭时 owner 仍可用本地预览。见 [验证记录](validation/a10/README.md) |
 | A12 规模 | 有测量 | 见验证记录的规模测量；预算偏差列在该节 |
-| 读屏 | **缺** | 角色/aria 标签已有，未用读屏实测 |
+| 读屏 / 当前项定位 | **U07 部分通过** | Desktop 的当前项定位、窄窗口和键盘焦点路径已复验。VoiceOver 按本轮范围跳过。见 [U07 验收记录](validation/u07/README.md) |
 | T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |
 | 20 次启停无增长 | 自动化（真实 Cordis context） | Web 上的真实 Loader 20 次启停未执行 |
 | 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |

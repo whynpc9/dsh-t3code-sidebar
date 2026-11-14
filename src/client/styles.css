@@ -45,6 +45,21 @@
   outline-offset: -2px;
 }
 
+.t3sb-locate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.t3sb-locate button:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
 @media (hover: hover) {
   .t3sb-header-button:hover {
     background: var(--dsw-alias-interactive-bg-hover);

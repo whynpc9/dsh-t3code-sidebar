@@ -22,14 +22,18 @@ function toLocalInput(at: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-export function SnoozeDialog({ runtime, sessionId, now }: { runtime: Runtime; sessionId: string; now: number }) {
+export function SnoozeDialog({ runtime, sessionId, now, onClose }: {
+  runtime: Runtime
+  sessionId: string
+  now: number
+  onClose: () => void
+}) {
   const t = runtime.t
   const backend = useSyncExternalStore(runtime.backend.subscribe, runtime.backend.getSnapshot)
   const ready = backend.status === 'ready'
   const [value, setValue] = useState(() => toLocalInput(snoozePresets(now).find(preset => preset.id === 'tomorrow-09')?.until ?? now + 3_600_000))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const close = () => { runtime.snoozeRequest.set(null) }
   const submit = async () => {
     // Reject wall-clock times that do not exist locally (DST gap) rather than shifting them.
     const until = parseLocalDateTime(value)
@@ -37,14 +41,14 @@ export function SnoozeDialog({ runtime, sessionId, now }: { runtime: Runtime; se
     setBusy(true)
     const result = await runtime.command(sessionId, { kind: 'snooze', until })
     setBusy(false)
-    if (result.ok) close()
+    if (result.ok) onClose()
     else setError(errorText(t, result.code))
   }
   return (
-    <Modal open onClose={close} title={t('snooze.title')} description={t('snooze.note')} closeLabel={t('dialog.close')}
+    <Modal open onClose={onClose} title={t('snooze.title')} description={t('snooze.note')} closeLabel={t('dialog.close')}
       footer={(
         <div className="t3sb-dialog-footer">
-          <Button variant="outline" onClick={close}>{t('snooze.cancel')}</Button>
+          <Button variant="outline" onClick={onClose}>{t('snooze.cancel')}</Button>
           <Button variant="primary" disabled={!ready || busy} onClick={() => { void submit() }}>{t('snooze.confirm')}</Button>
         </div>
       )}>
