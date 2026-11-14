@@ -125,6 +125,8 @@ DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对�
 
 ### 规模测量（Q02）
 
+此节保留旧版测量。最新有界窗口和 50 并发实测见 [Q02 复验](../q02-q03/README.md)。
+
 用 [`scale-seed.mjs`](../../../tests/e2e/scale-seed.mjs) 在另一个新 `DSH_HOME` 中由一条真实会话日志复制出 100 个工作区 × 50 条会话（宿主另自动建 1 条），再用 [`scale.mjs`](../../../tests/e2e/scale.mjs) 测量。计时在页面内取，从触发点击到 DOM 显示结果后的首个动画帧，不含 Playwright 往返。
 
 | 指标（实现 Spec §10 预算） | 空闲 5001 会话 | 48 个并发运行轮次 | 判定 |
@@ -133,7 +135,7 @@ DSH_HOME="$test_root/home" "$desktop_cli" plugin --profile desktop add "<绝对�
 | 视图切换 状态↔工作区↔单列表 p95（<150 ms） | 34 ms | 71 ms | 通过 |
 | 标题/工作区即时搜索 p95（<100 ms） | 17 ms | 14 ms | 通过 |
 | 语义操作 Settle/Unsettle p95（<100 ms，本地） | 115 ms | 113 ms | 含 Host 命令往返（活动与待交互的精确读取）与 follow delta；纯本地渲染部分未单独测 |
-| 常驻会话行（≤ 可视 + 150） | 状态 6、工作区 6、单列表 200 | 53（Working 48 不设水位线） | 通过 |
+| 常驻会话行（≤ 可视 + 150） | 状态 6、工作区 6、单列表 200 | 53（Working 48 不设水位线） | 初始渲染样本，未测长滚动 |
 | JS 堆 | 35 → 37.5 MB（5 次重载） | 48.8 MB，重载后 40 MB | 无持续增长 |
 
 修复后的回归：单列表原先渲染全部 5001 行，切入单列表的视图切换 p95 为 895 ms。现改为 200 行窗口，随滚动增长并始终包含当前会话。另一个修复：没有插件记录的冷会话原先永远不提供“收起”按钮，因为浏览器把“无视图”当作活动未知。现在 Host 就绪时视其为无后台工作；读取失败的会话由 Host 显式发布为未知。
@@ -189,8 +191,8 @@ node tests/e2e/scenario.mjs "<打印出的带 token URL>" <一个空目录> docs
 npx -p @deepseek-ai/dsh@0.2.2-rc.1 dsh plugin --profile sbtest add "$DSH_HOME/dsh-t3code-approval-gate-fixture-0.0.1.tgz"
 node tests/e2e/features.mjs "<带 token URL>" <输出目录>
 
-# 规模（另一个从未启动过的 DSH_HOME；模板取任一已完成会话的 session.v4.jsonl.zstd；需 zstd CLI）
+# 规模（另一个从未启动过的 DSH_HOME；用脚本化模型完成一轮后的 session.v4.jsonl.zstd 做模板；需 zstd CLI）
 node tests/e2e/scale-seed.mjs "$SCALE_HOME" <工作区根目录> <模板日志> 100 50
-node tests/e2e/scale.mjs "<带 token URL>" <输出目录> 0     # 空闲
-node tests/e2e/scale.mjs "<带 token URL>" <输出目录> 50    # 另起 50 个慢速轮次（启动桩时设 MOCK_SLOW_MS=300000）
+node tests/e2e/scale.mjs "<宿主日志文件>" <输出目录> 0     # 空闲
+node tests/e2e/scale.mjs "<宿主日志文件>" <输出目录> 50    # 另起 50 个慢速轮次（启动桩时设 MOCK_SLOW_MS=300000）
 ```

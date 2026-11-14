@@ -1,6 +1,6 @@
 # 发行说明、支持矩阵与发布门禁（R01）
 
-更新：2026-11-12，对应 `0.1.0-alpha.2`。本文是 [开发计划](development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
+更新：2026-11-14，对应 `0.1.0-alpha.2`。本文是 [开发计划](development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
 
 ## 1. 支持矩阵
 
@@ -38,10 +38,10 @@
 | A02 等待审批 / A03 新审批唤醒 | **通过（Linux Web）** | 本机无 bubblewrap，bash 不升级沙箱；以测试专用 `approval-gate` 夹具经真实审批流程触发 |
 | A07 搜索竞态 / A08 键盘 | 自动化 | `tests/client/sidebar.spec.tsx`（真实 DOM）+ e2e N09 |
 | A10 权限撤回 / guest | **通过（Web，隔离 Gateway 夹具）** | guest 默认原生侧栏；撤权后关闭任务视图、拒绝读写和后续流帧；未知写入被拒；任务 API 关闭时 owner 仍可用本地预览。见 [验证记录](validation/a10/README.md) |
-| A12 规模 | 有测量 | 见验证记录的规模测量；预算偏差列在该节 |
+| A12 规模 | **Linux Web 通过已测负载** | 100 个工作区 / 5000 条会话 / 50 个并发轮次。首屏、本地更新、搜索、切换、单列表长滚动行数均在预算内。见 [Q02 实测](validation/q02-q03/README.md)。 |
 | 读屏 / 当前项定位 | **U07 部分通过** | Desktop 的当前项定位、窄窗口和键盘焦点路径已复验。VoiceOver 按本轮范围跳过。见 [U07 验收记录](validation/u07/README.md) |
 | T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |
-| 20 次启停无增长 | 自动化（真实 Cordis context） | Web 上的真实 Loader 20 次启停未执行 |
+| Q03 生命周期与重复启停 | **Linux Web 功能通过** | 安装、升级、回退、卸载、重装、同槽竞争、Host 服务缺失和 20 次真实 Loader 启停已验证。100 次复验中，停用后的任务 DOM 和 follow 流归零，浏览器堆仍有增长，主要来自 V8 编译。断网和跨长时间段场景按本轮范围跳过。见 [Q03 实测](validation/q02-q03/README.md#q03--安装冲突与启停)。 |
 | 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |
 | npm 包名可用性 | 未确认 | 正式发布前确认 `dsh-t3code-sidebar` 在 registry 上可用 |
 

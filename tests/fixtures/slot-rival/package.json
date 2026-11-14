@@ -1,0 +1,12 @@
+{
+  "name": "dsh-t3code-slot-rival-fixture",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "client.js", "cordis.patch.yml"],
+  "exports": { ".": "./index.js", "./client": "./client.js", "./package.json": "./package.json" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-client-ui-sidebar"] }
+  }
+}

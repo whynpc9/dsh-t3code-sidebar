@@ -245,69 +245,54 @@ describe('native ⌘K / ⌘O requests', () => {
 })
 
 describe('one-list window (Q02)', () => {
-  it('renders a bounded window that reaches the current session and grows when its end comes into view', () => {
-    const observers: { callback: IntersectionObserverCallback; targets: Element[] }[] = []
-    const original = globalThis.IntersectionObserver
-    globalThis.IntersectionObserver = class {
-      readonly targets: Element[] = []
-      constructor(readonly callback: IntersectionObserverCallback) { observers.push(this) }
-      observe(target: Element) { this.targets.push(target) }
-      disconnect() { observers.splice(observers.indexOf(this), 1) }
-      unobserve() {}
-      takeRecords() { return [] }
-    } as unknown as typeof IntersectionObserver
-    try {
-      const now = Date.now()
-      const sessions = Array.from({ length: 450 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000 }))
-      const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
-      const view = render(runtime)
-      const rowCount = () => view.querySelectorAll('.t3sb-session-row').length
-      expect(rowCount()).toBe(200)
-      expect(view.querySelector('[data-row-key="flat:more"]')).not.toBeNull()
+  it('replaces the rendered rows as the viewport moves and reaches both ends with the keyboard', () => {
+    const now = Date.now()
+    const sessions = Array.from({ length: 5000 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000 }))
+    const view = render(fakeRuntime({ sessions, prefs: { groupBy: 'flat' } }))
+    const list = view.querySelector<HTMLElement>('.t3sb-flat-list')!
+    Object.defineProperty(list, 'clientHeight', { value: 680 })
+    const scroll = (index: number) => {
       act(() => {
-        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
+        list.scrollTop = index * 34
+        list.dispatchEvent(new Event('scroll'))
       })
-      expect(rowCount()).toBe(400)
-      act(() => {
-        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
-      })
-      expect(rowCount()).toBe(450)
-      expect(view.querySelector('[data-row-key="flat:more"]')).toBeNull()
-    } finally {
-      globalThis.IntersectionObserver = original
     }
+    const key = (key: string) => act(() => { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) })
+    const row = (id: number) => list.querySelector<HTMLElement>(`[data-session-id="s${id}"]`)
+    scroll(0)
+    expect(row(0)).not.toBeNull()
+    scroll(2500)
+    expect(row(0)).toBeNull()
+    expect(row(2500)?.getAttribute('aria-posinset')).toBe('2501')
+    expect(row(2500)?.getAttribute('aria-setsize')).toBe('5000')
+    expect(list.querySelectorAll('.t3sb-session-row')).toHaveLength(60)
+    act(() => { row(2500)?.focus() })
+    scroll(3500)
+    expect(document.activeElement).toBe(row(2500))
+    key('End')
+    expect(focusedKey()).toBe('session:s4999')
+    expect(row(2500)).toBeNull()
+    key('Home')
+    expect(focusedKey()).toBe('session:s0')
+    key('ArrowDown')
+    expect(focusedKey()).toBe('session:s1')
   })
 
-  it('grows past a window that already reaches a current session beyond the first page', () => {
-    const observers: { callback: IntersectionObserverCallback }[] = []
-    const original = globalThis.IntersectionObserver
-    globalThis.IntersectionObserver = class {
-      constructor(readonly callback: IntersectionObserverCallback) { observers.push(this) }
-      observe() {}
-      disconnect() { observers.splice(observers.indexOf(this), 1) }
-      unobserve() {}
-      takeRecords() { return [] }
-    } as unknown as typeof IntersectionObserver
-    try {
-      const now = Date.now()
-      const sessions = Array.from({ length: 700 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000, ...(i === 450 ? { retainedBy: { mainView: 1 } } : {}) }))
-      const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
-      const view = render(runtime)
-      const rowCount = () => view.querySelectorAll('.t3sb-session-row').length
-      expect(rowCount()).toBe(451)
-      act(() => {
-        for (const observer of [...observers]) observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver)
-      })
-      expect(rowCount()).toBe(651)
-    } finally {
-      globalThis.IntersectionObserver = original
-    }
-  })
-
-  it('always renders the current session even beyond the first window', async () => {
-    const { flatWindow } = await import('../../src/client/model.ts')
-    const rows = Array.from({ length: 300 }, (_, i) => ({ current: i === 250 }) as never)
-    expect(flatWindow(rows, 200)).toMatchObject({ hiddenCount: 49 })
-    expect(flatWindow(rows, 200).rows).toHaveLength(251)
+  it('locates and focuses a far current session without opening it or mounting the preceding rows', () => {
+    const now = Date.now()
+    const sessions = Array.from({ length: 700 }, (_, i) => session(`s${i}`, {
+      updatedAt: now - i * 1000,
+      ...(i === 450 ? { retainedBy: { mainView: 1 } } : {}),
+    }))
+    const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
+    const view = render(runtime)
+    const list = view.querySelector<HTMLElement>('.t3sb-flat-list')!
+    Object.defineProperty(list, 'clientHeight', { value: 680 })
+    expect(view.querySelector('[aria-selected="true"]')).toBeNull()
+    act(() => { view.querySelector<HTMLButtonElement>('.t3sb-locate button')?.click() })
+    expect(focusedKey()).toBe('session:s450')
+    expect(view.querySelector('[data-session-id="s0"]')).toBeNull()
+    expect(view.querySelectorAll('.t3sb-session-row').length).toBeLessThan(65)
+    expect(runtime.open).not.toHaveBeenCalled()
   })
 })

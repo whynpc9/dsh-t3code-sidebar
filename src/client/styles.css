@@ -386,7 +386,6 @@
   scrollbar-gutter: stable;
 }
 
-.t3sb-flat-list > * + *,
 .t3sb-search-tree > [role='treeitem'] + [role='treeitem'],
 .t3sb-group > * + * {
   margin-top: 2px;
@@ -396,9 +395,17 @@
   position: relative;
 }
 
-/* Marks the end of the rendered part of the one list (it grows on scroll). */
-.t3sb-grow-sentinel {
-  height: 1px;
+.t3sb-flat-list {
+  overflow-anchor: none;
+}
+
+.t3sb-flat-track {
+  position: relative;
+}
+
+.t3sb-flat-item {
+  position: absolute;
+  inset-inline: 0;
 }
 
 .t3sb-group + .t3sb-group {

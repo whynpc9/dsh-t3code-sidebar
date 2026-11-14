@@ -265,7 +265,12 @@ function MoreButton({ row, env, title, menuOpen }: { row: Row; env: RowEnv; titl
   )
 }
 
-export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showPin: boolean }) {
+export function SessionRow({ row, env, showPin, position }: {
+  row: Row
+  env: RowEnv
+  showPin: boolean
+  position?: { index: number; count: number }
+}) {
   const { t, now } = env
   const title = displayTitle(row, t)
   const status = statusOf(row, t)
@@ -307,6 +312,8 @@ export function SessionRow({ row, env, showPin }: { row: Row; env: RowEnv; showP
       className={cx('t3sb-session-row', row.current && 't3sb-selected', menuOpen && 't3sb-menu-open', archived && 't3sb-archived')}
       role="treeitem"
       aria-selected={row.current}
+      aria-posinset={position?.index}
+      aria-setsize={position?.count}
       aria-description={archived ? t('toast.archivedNotOpenable') : undefined}
       tabIndex={0}
       onClick={() => { env.open(row) }}

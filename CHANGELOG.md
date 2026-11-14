@@ -2,6 +2,10 @@
 
 All versions are internal alphas (R0); nothing has been published to npm. The verified runtime is `@deepseek-ai/dsh` `0.2.2-rc.1`; see [docs/release.md](docs/release.md) for the support matrix and release gates.
 
+## Unreleased
+
+- The one list now mounts only the visible sessions and nearby rows as you scroll. Home, End, and Locate current session can reach sessions anywhere in the list.
+
 ## 0.1.0-alpha.2 — 2026-11-12
 
 ### Added

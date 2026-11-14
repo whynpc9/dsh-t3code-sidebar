@@ -1,0 +1,297 @@
+{
+  "at": "2026-11-14T03:37:43.396Z",
+  "activeTurns": 50,
+  "metrics": {
+    "firstScreen": {
+      "navigationMs": 1793.2000000178814,
+      "clientMs": 35.099999994039536,
+      "receipts": {
+        "remoteAccess/follow": 591.6000000238419,
+        "/api/t3Sidebar/getSnapshot": 592.8000000119209,
+        "account/watch": 593.8000000119209,
+        "workspace/follow": 608.7000000178814,
+        "$events": 613.6000000238419,
+        "t3Sidebar/follow": 620.5,
+        "session/control": 647.6000000238419,
+        "/api/session/list": 1758.1000000238419
+      }
+    },
+    "status": {
+      "sessionRows": 6,
+      "allNodes": 119,
+      "sections": {
+        "active": 6
+      }
+    },
+    "heapAfterLoadMb": 34.4,
+    "withActive": {
+      "sessionRows": 56,
+      "allNodes": 1029,
+      "sections": {
+        "active": 6,
+        "working": 50
+      }
+    },
+    "workingRows": 50,
+    "heapWithActiveMb": 40.1,
+    "catalogSessions": 5002,
+    "viewSwitch": {
+      "timeouts": 0,
+      "n": 30,
+      "p50": 36,
+      "p95": 55,
+      "max": 56
+    },
+    "workspaceView": {
+      "groups": 100,
+      "sessionRows": 6
+    },
+    "flatView": {
+      "samples": [
+        {
+          "fraction": 0,
+          "top": 0,
+          "mounted": 37,
+          "visible": 17,
+          "first": 1,
+          "total": 5001
+        },
+        {
+          "fraction": 0.25,
+          "top": 42368,
+          "mounted": 56,
+          "visible": 16,
+          "first": 1227,
+          "total": 5001
+        },
+        {
+          "fraction": 0.5,
+          "top": 84762,
+          "mounted": 56,
+          "visible": 16,
+          "first": 2474,
+          "total": 5001
+        },
+        {
+          "fraction": 0.75,
+          "top": 127143,
+          "mounted": 56,
+          "visible": 16,
+          "first": 3720,
+          "total": 5001
+        },
+        {
+          "fraction": 1,
+          "top": 169524,
+          "mounted": 35,
+          "visible": 15,
+          "first": 4967,
+          "total": 5001
+        },
+        {
+          "fraction": 0.5,
+          "top": 84762,
+          "mounted": 56,
+          "visible": 16,
+          "first": 2474,
+          "total": 5001
+        },
+        {
+          "fraction": 0,
+          "top": 0,
+          "mounted": 37,
+          "visible": 17,
+          "first": 1,
+          "total": 5001
+        }
+      ],
+      "keyboard": [
+        "End",
+        "Locate current session",
+        "Home",
+        "ArrowDown"
+      ],
+      "heapAfterScrollingMb": 33.7
+    },
+    "titleSearch": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 11,
+      "p95": 15,
+      "max": 16
+    },
+    "searchRows": 20,
+    "semanticUpdate": {
+      "timeouts": 0,
+      "n": 20,
+      "p50": 19,
+      "p95": 28,
+      "max": 31
+    },
+    "heapFinalMb": 37.6,
+    "final": {
+      "sessionRows": 56,
+      "allNodes": 1029,
+      "sections": {
+        "active": 6,
+        "working": 50
+      }
+    }
+  },
+  "samples": {
+    "viewSwitchMs": [
+      29,
+      38,
+      50,
+      27,
+      36,
+      54,
+      26,
+      37,
+      50,
+      24,
+      36,
+      50,
+      25,
+      36,
+      52,
+      27,
+      38,
+      52,
+      26,
+      39,
+      55,
+      26,
+      39,
+      56,
+      26,
+      35,
+      49,
+      28,
+      35,
+      45
+    ],
+    "titleSearchMs": [
+      16,
+      13,
+      12,
+      11,
+      11,
+      10,
+      11,
+      11,
+      11,
+      10,
+      10,
+      12,
+      11,
+      11,
+      10,
+      13,
+      13,
+      12,
+      15,
+      11
+    ],
+    "semanticUpdateMs": [
+      25,
+      28,
+      18,
+      18,
+      28,
+      17,
+      19,
+      19,
+      19,
+      19,
+      18,
+      18,
+      23,
+      21,
+      19,
+      21,
+      21,
+      21,
+      31,
+      19
+    ],
+    "reloads": [
+      {
+        "navigationMs": 1618.699999988079,
+        "clientMs": 93.5,
+        "receipts": {
+          "remoteAccess/follow": 295.89999997615814,
+          "/api/t3Sidebar/getSnapshot": 296.39999997615814,
+          "account/watch": 297.09999999403954,
+          "workspace/follow": 312,
+          "$events": 317.09999999403954,
+          "t3Sidebar/follow": 324.09999999403954,
+          "session/control": 356.19999998807907,
+          "/api/session/list": 1525.199999988079
+        },
+        "heapMb": 34.7
+      },
+      {
+        "navigationMs": 1867.300000011921,
+        "clientMs": 99.30000001192093,
+        "receipts": {
+          "remoteAccess/follow": 571.0999999940395,
+          "/api/t3Sidebar/getSnapshot": 573.1999999880791,
+          "account/watch": 574.8000000119209,
+          "workspace/follow": 577.1999999880791,
+          "$events": 582.3000000119209,
+          "t3Sidebar/follow": 597.3000000119209,
+          "session/control": 615.4000000059605,
+          "/api/session/list": 1768
+        },
+        "heapMb": 34.7
+      },
+      {
+        "navigationMs": 1950.300000011921,
+        "clientMs": 94.5,
+        "receipts": {
+          "remoteAccess/follow": 574.5999999940395,
+          "/api/t3Sidebar/getSnapshot": 581.5,
+          "account/watch": 582.4000000059605,
+          "workspace/follow": 585.2000000178814,
+          "$events": 589.8000000119209,
+          "t3Sidebar/follow": 602.3000000119209,
+          "session/control": 621.8000000119209,
+          "/api/session/list": 1855.800000011921
+        },
+        "heapMb": 35.5
+      },
+      {
+        "navigationMs": 2049.0999999940395,
+        "clientMs": 101.39999997615814,
+        "receipts": {
+          "remoteAccess/follow": 575,
+          "account/watch": 582.0999999940395,
+          "/api/t3Sidebar/getSnapshot": 583.0999999940395,
+          "workspace/follow": 586.2000000178814,
+          "$events": 590.7000000178814,
+          "t3Sidebar/follow": 607.5999999940395,
+          "session/control": 641,
+          "/api/session/list": 1947.7000000178814
+        },
+        "heapMb": 36.2
+      },
+      {
+        "navigationMs": 1771.7999999821186,
+        "clientMs": 96.19999998807907,
+        "receipts": {
+          "remoteAccess/follow": 601.1999999880791,
+          "/api/t3Sidebar/getSnapshot": 602.5999999940395,
+          "account/watch": 604.1999999880791,
+          "workspace/follow": 606.4000000059605,
+          "$events": 611.0999999940395,
+          "t3Sidebar/follow": 624.4000000059605,
+          "session/control": 643.6999999880791,
+          "/api/session/list": 1675.5999999940395
+        },
+        "heapMb": 36.9
+      }
+    ]
+  },
+  "errors": []
+}

@@ -1,0 +1,1039 @@
+{
+  "steps": [
+    {
+      "step": "install previous tgz from clean profile"
+    },
+    {
+      "step": "park a real mock-backed session and verify persisted state"
+    },
+    {
+      "step": "upgrade in place and preserve task and conversation"
+    },
+    {
+      "step": "reject stale mutation and retain data"
+    },
+    {
+      "step": "20 real Loader disable and enable cycles"
+    },
+    {
+      "step": "roll back in place and preserve task and conversation"
+    },
+    {
+      "step": "uninstall restores native sidebar and removes plugin Remote"
+    },
+    {
+      "step": "reinstall restores persisted state"
+    },
+    {
+      "step": "higher-priority slot wins and disabling it restores sidebar"
+    },
+    {
+      "step": "20 Loader control cycles with only the rival fixture"
+    }
+  ],
+  "cycles": [
+    {
+      "cycle": 1,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 25403204,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 26554852,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 2,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 25805864,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 26740684,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 3,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26018180,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27025468,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 4,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26247744,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27289544,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 5,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26484744,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27379916,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 6,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26522792,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27396524,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 7,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26548120,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27440532,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 8,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26603712,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27499884,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 9,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26667012,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27570644,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 10,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26736224,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27607100,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 11,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26741184,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27613932,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 12,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26743804,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27626048,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 13,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26762752,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27647316,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 14,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26791704,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27674912,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 15,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26807792,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27747904,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 16,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26878176,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27753300,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 17,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26891768,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27808792,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 18,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26925012,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27823636,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 19,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26958144,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27841828,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    },
+    {
+      "cycle": 20,
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26985240,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      },
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 218,
+        "Nodes": 1448,
+        "JSHeapUsedSize": 27860744,
+        "sidebars": 1,
+        "pluginRows": 1,
+        "pluginStyles": 1,
+        "nativeBrowsers": 0,
+        "pluginStreams": 1
+      }
+    }
+  ],
+  "errors": [],
+  "controlCycles": [
+    {
+      "cycle": 1,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26004480,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26252248,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 2,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26167940,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26360748,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 3,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26259316,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26433816,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 4,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26332576,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26498428,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 5,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26391676,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26516416,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 6,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26406808,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26539004,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 7,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26437476,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26587292,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 8,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26498596,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26635124,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 9,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26544116,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26652856,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 10,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26551060,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26668372,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 11,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26569760,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26674108,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 12,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26567980,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26677164,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 13,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26568504,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26678120,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 14,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26576720,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26678120,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 15,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26576732,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26678044,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 16,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26577040,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26682568,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 17,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26581180,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26686716,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 18,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26585364,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26685512,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 19,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1411,
+        "JSHeapUsedSize": 26585364,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26696484,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    },
+    {
+      "cycle": 20,
+      "enabled": {
+        "Documents": 2,
+        "JSEventListeners": 205,
+        "Nodes": 1339,
+        "JSHeapUsedSize": 26587956,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 0,
+        "pluginStreams": 0
+      },
+      "disabled": {
+        "Documents": 2,
+        "JSEventListeners": 212,
+        "Nodes": 1408,
+        "JSHeapUsedSize": 26701384,
+        "sidebars": 0,
+        "pluginRows": 0,
+        "pluginStyles": 0,
+        "nativeBrowsers": 1,
+        "pluginStreams": 0
+      }
+    }
+  ]
+}

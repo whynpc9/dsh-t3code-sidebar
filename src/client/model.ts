@@ -443,21 +443,6 @@ export function autoSettleApplies(row: Pick<Row, 'workspaceId'>, policy: TimePol
   return effectivePolicy(policy, row.workspaceId).days !== null
 }
 
-/**
- * Rows the one-list grouping renders at first and per growth step. Native
- * renders every row; past ~200 rows that costs hundreds of milliseconds per
- * view switch (Q02), so the list renders a window that grows on scroll and
- * always reaches the current session.
- */
-export const FLAT_WINDOW = 200
-
-/** The rendered prefix of the one-list rows: at least `limit` rows and through the current session. */
-export function flatWindow(rows: readonly Row[], limit: number): { readonly rows: readonly Row[]; readonly hiddenCount: number } {
-  const current = rows.findIndex(row => row.current)
-  const end = Math.min(rows.length, Math.max(limit, current + 1))
-  return { rows: rows.slice(0, end), hiddenCount: rows.length - end }
-}
-
 /** Whether rows may treat a session without a Host view as having no background work (see `ModelInputs.hostActivity`). */
 export function hostActivityKnown(backend: { readonly kind: string; readonly status: string; readonly capabilities: { readonly hostActivity: boolean } }): boolean {
   return backend.kind === 'host' && backend.status === 'ready' && backend.capabilities.hostActivity

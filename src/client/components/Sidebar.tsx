@@ -16,11 +16,12 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Key } from '../locales.ts'
 import {
-  buildRows, FLAT_WINDOW, hostActivityKnown, flatRows, flatWindow, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, visibleUnder, watermarkRows, workspaceGroups,
+  buildRows, hostActivityKnown, flatRows, nextFocusIndex, requiredWatermark, sanitizeQuery, searchResults, statusSections, visibleUnder, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ArchivedFilter, type ContentHit, type GroupBy, type Row, type SectionKey,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
 import type { Prefs, Runtime } from '../runtime.ts'
+import { FlatSessionList } from './FlatSessionList.tsx'
 import { AddWorkspaceDialog, RemoveWorkspaceDialog, RenameWorkspaceDialog, SnoozeDialog } from './Dialogs.tsx'
 import {
   cx, GroupRow, SearchResultRow, SessionRow, workspaceMenuIcons, WorkspaceHoverContent,
@@ -123,26 +124,6 @@ function ViewOptionsMenu({ groupBy, archivedFilter, onGroupBy, onArchivedFilter,
       )}
     />
   )
-}
-
-/**
- * Invisible marker after the rendered part of the one list: when it comes
- * within ~600px of the scrolled list's visible area the window grows.
- */
-function GrowSentinel({ onReach }: { onReach: () => void }) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const reach = useRef(onReach)
-  reach.current = onReach
-  useEffect(() => {
-    const element = ref.current
-    if (element === null || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some(entry => entry.isIntersecting)) reach.current()
-    }, { root: element.closest('.t3sb-list'), rootMargin: '0px 0px 600px 0px' })
-    observer.observe(element)
-    return () => { observer.disconnect() }
-  }, [])
-  return <div ref={ref} className="t3sb-grow-sentinel" data-row-key="flat:more" aria-hidden="true" />
 }
 
 function EmptySessions({ archivedOnly, onLeaveArchivedOnly, t }: { archivedOnly: boolean; onLeaveArchivedOnly: () => void; t: Runtime['t'] }) {
@@ -290,9 +271,6 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     setPrefs({ collapsed: { ...runtime.prefs.getSnapshot().collapsed, [key]: collapsed } })
   }
   const [marks, setMarks] = useState<Readonly<Record<string, number>>>({})
-  // One-list window: back to its first page whenever the grouping or filter changes.
-  const [flatLimit, setFlatLimit] = useState(FLAT_WINDOW)
-  useEffect(() => { setFlatLimit(FLAT_WINDOW) }, [groupBy, archivedFilter])
   const [motionKey, setMotionKey] = useState(0)
   const dropMark = (key: string) => {
     if (marks[key] === undefined) return
@@ -320,8 +298,9 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     setLocateTarget(current.sessionId)
   }
 
+  const finishLocate = useCallback(() => { setLocateTarget(null) }, [])
   useLayoutEffect(() => {
-    if (locateTarget === null || !wide || normalizedQuery !== '') return
+    if (groupBy === 'flat' || locateTarget === null || !wide || normalizedQuery !== '') return
     const selected = listArea.current?.querySelectorAll<HTMLElement>('.t3sb-session-row[aria-selected="true"]') ?? []
     const row = Array.from(selected).find(element => element.dataset['sessionId'] === locateTarget)
     if (row !== undefined) {
@@ -329,7 +308,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
       row.scrollIntoView({ block: 'nearest', behavior: 'instant' })
     }
     setLocateTarget(null)
-  }, [locateTarget, normalizedQuery, wide])
+  }, [groupBy, locateTarget, normalizedQuery, wide])
 
   const closeSnooze = (sessionId: string) => {
     if (runtime.snoozeRequest.getSnapshot() !== sessionId) return
@@ -405,6 +384,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
 
   const leaveArchivedOnly = () => { setPrefs({ archivedFilter: 'default' }) }
   const archivedOnly = archivedFilter === 'only'
+  const emptySessions = <EmptySessions archivedOnly={archivedOnly} onLeaveArchivedOnly={leaveArchivedOnly} t={t} />
+  const oneList = useMemo(() => groupBy === 'flat' ? flatRows(rows, archivedFilter) : [], [groupBy, rows, archivedFilter])
 
   let body: ReactNode
   let empty = false
@@ -455,21 +436,6 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         </div>
       )
     })
-  } else {
-    const list = flatRows(rows, archivedFilter)
-    empty = list.length === 0
-    const shown = flatWindow(list, flatLimit)
-    const nodes: ReactNode[] = shown.rows.map((row) => {
-      rowKeys.push(`session:${row.sessionId}`)
-      return <SessionRow key={row.sessionId} row={row} env={env} showPin />
-    })
-    body = nodes
-    if (shown.hiddenCount > 0) {
-      rowKeys.push('flat:more')
-      // Grow from what is rendered (the window may already reach past the limit to the current session).
-      const rendered = shown.rows.length
-      nodes.push(<GrowSentinel key={`flat:more:${rendered}`} onReach={() => { setFlatLimit(limit => Math.max(limit, rendered) + FLAT_WINDOW) }} />)
-    }
   }
   if (empty) rowKeys.unshift('empty')
   const currentInList = current === undefined || rowKeys.includes(`session:${current.sessionId}`)
@@ -511,6 +477,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   // Arrow keys, Home and End move focus between rows (group headers, sessions, search results)
   // while a row itself has focus; Tab still walks into a row's own buttons.
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (groupBy === 'flat' && normalizedQuery === '') return
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
     const rowsInView = [...event.currentTarget.querySelectorAll<HTMLElement>('.t3sb-group-row, .t3sb-session-row, .t3sb-search-row')]
     const index = rowsInView.indexOf(event.target as HTMLElement)
@@ -596,12 +563,20 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
       <div ref={listArea} className="t3sb-list-area" onKeyDown={onListKeyDown}>
         {wide && (normalizedQuery !== '' ? searchView() : (
           <HoverCardGroup className="t3sb-tree-body t3sb-wide">
-            {!currentInList && locateNotice}
-            <AnimatedRows className={cx('t3sb-list', groupBy === 'flat' && 't3sb-flat-list')} role="tree" label={label}
-              rowKeys={rowKeys} ready={listReady} resetKey={JSON.stringify([groupBy, archivedFilter, motionKey])}>
-              {empty && <EmptySessions archivedOnly={archivedOnly} onLeaveArchivedOnly={leaveArchivedOnly} t={t} />}
-              {body}
-            </AnimatedRows>
+            {groupBy === 'flat' ? (
+              <FlatSessionList key={archivedFilter} rows={oneList} env={env} label={label}
+                currentId={current?.sessionId} locateNotice={locateNotice} empty={emptySessions}
+                locateTarget={locateTarget} onLocated={finishLocate} snoozeTarget={snoozeTarget} snoozeFocusTarget={snoozeFocusTarget} />
+            ) : (
+              <>
+                {!currentInList && locateNotice}
+                <AnimatedRows className="t3sb-list" role="tree" label={label}
+                  rowKeys={rowKeys} ready={listReady} resetKey={JSON.stringify([groupBy, archivedFilter, motionKey])}>
+                  {empty && emptySessions}
+                  {body}
+                </AnimatedRows>
+              </>
+            )}
             <span className="t3sb-fade" />
           </HoverCardGroup>
         ))}
