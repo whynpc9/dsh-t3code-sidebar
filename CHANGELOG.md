@@ -1,10 +1,28 @@
 # Changelog
 
-All versions are internal alphas (R0); nothing has been published to npm. The verified runtime is `@deepseek-ai/dsh` `0.2.2-rc.1`; see [docs/release.md](docs/release.md) for the support matrix and release gates.
+`0.1.0-preview.0` is the first npm release (v0.1-preview, Linux Web), published under the `preview` dist-tag. Earlier versions were internal alphas (R0) and were never published. The verified runtime is `@deepseek-ai/dsh` `0.2.2-rc.1`; see [docs/release.md](docs/release.md) for the support matrix, release gates and known limitations.
 
-## Unreleased
+## 0.1.0-preview.0 — 2026-11-16
 
+First public preview (v0.1-preview, Linux Web). Install with `dsh plugin --profile <profile> add dsh-t3code-sidebar@preview`.
+
+### Added
+
+- **Locate current session (U07).** When a search or the archived filter hides the current session, the sidebar offers **Locate current session**. It clears the filter, expands a collapsed workspace and focuses the current row.
+- **Task access control (A10).** The Host checks task access on every task, policy and audit call and on the follow stream. A guest without access keeps the native Workspaces sidebar. When access is revoked, the task sidebar and any open menu are withdrawn and the stream ends with `t3Sidebar/access-denied`. Unknown command, action and policy fields are rejected.
+
+### Fixed
+
+- Closing the custom Snooze dialog returns focus to the session's actions button instead of the page root.
 - The one list now mounts only the visible sessions and nearby rows as you scroll. Home, End, and Locate current session can reach sessions anywhere in the list.
+- Automatic settling: a series of fixes so that keep protections are judged against rebuilt result history, the policy scope is never guessed, workspace membership is revalidated before a settle is committed, and an automatic settle that overlapped a turn ending with a held result is reopened (#7).
+
+### Validation
+
+- Linux Web: scale (100 workspaces / 5000 sessions / 50 concurrent turns) and lifecycle (install, upgrade, rollback, uninstall, reinstall, slot rivalry, Host-off, 20 real Loader restarts) — [Q02/Q03](docs/validation/q02-q03/README.md).
+- Web access control with an isolated Gateway fixture — [A10](docs/validation/a10/README.md).
+- macOS Desktop keyboard and focus paths, including ⌘K / ⌘O — [U07](docs/validation/u07/README.md). Desktop is not yet a supported platform (v0.1, M6).
+- `pnpm run verify`: typecheck, 240 tests, build, pack check.
 
 ## 0.1.0-alpha.2 — 2026-11-12
 
