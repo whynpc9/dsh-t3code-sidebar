@@ -65,7 +65,8 @@
     "test": "TZ=America/New_York vitest run",
     "pack:check": "node scripts/pack-check.mjs",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check",
-    "prepublishOnly": "pnpm run verify"
+    "prepublishOnly": "pnpm run verify",
+    "release:preview": "pnpm publish --tag preview"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",

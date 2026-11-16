@@ -44,8 +44,8 @@
 | Q03 生命周期与重复启停 | **Linux Web 功能通过** | 安装、升级、回退、卸载、重装、同槽竞争、Host 服务缺失和 20 次真实 Loader 启停已验证。100 次复验中，停用后的任务 DOM 和 follow 流归零，浏览器堆仍有增长，主要来自 V8 编译。断网和跨长时间段场景按本轮范围跳过。见 [Q03 实测](validation/q02-q03/README.md#q03--安装冲突与启停)。 |
 | 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |
 | npm 包名可用性 | **已确认** | 2026-11-16 `npm view dsh-t3code-sidebar` 返回 404，名称未被占用 |
-| 发布流程 | 已配置 | `prepublishOnly` 运行 `pnpm run verify`；`publishConfig.tag` 为 `preview`，预览版不占用 `latest` |
-| 从 registry 安装 | **发布后待验证** | 发布后在新测试 profile 执行 `dsh plugin --profile <p> add dsh-t3code-sidebar@preview`，确认 Host 与 Client 两半均加载 |
+| 发布流程 | 已配置 | 用 `pnpm run release:preview`（即 `pnpm publish --tag preview`）发布，预览版不占用 `latest`。pnpm 11 不读取 `publishConfig.tag`，直接 `pnpm publish` 会标为 `latest`，`prepublishOnly` 也拿不到标签，无法拦截。`publishConfig.tag` 只作为 `npm publish` 的兜底。`prepublishOnly` 运行 `pnpm run verify` |
+| 从 registry 安装 | **发布后待验证** | 发布后在新测试 profile 执行 `dsh plugin --profile <p> add dsh-t3code-sidebar@preview`，确认 Host 与 Client 两半均加载；用 `npm view dsh-t3code-sidebar dist-tags` 核对 `preview` 指向 `0.1.0-preview.0` |
 
 ## 5. 已知限制（release notes 必须列出）
 
