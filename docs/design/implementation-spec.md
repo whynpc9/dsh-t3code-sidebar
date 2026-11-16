@@ -16,7 +16,7 @@
 | ADR06 | v0.1 单 Host、单 profile、owner-only | 同一 Host 所有者的窗口共享任务整理状态；不把 PeerScope 当持久用户 ID |
 | ADR07 | 首版 Working 固定开启；Settled 支持手动与时间策略 | 自动 Settled 首版交付；关闭 Working 的设置进入 v0.2 |
 
-事实依据及精确代码位置见[插件边界](research/harness-plugin-boundary.md)与[状态契约](research/harness-state-contract.md)。
+事实依据及精确代码位置见[插件边界](../research/harness-plugin-boundary.md)与[状态契约](../research/harness-state-contract.md)。
 
 ## 2. 模块和数据流
 

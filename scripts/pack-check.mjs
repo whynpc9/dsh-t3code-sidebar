@@ -5,9 +5,18 @@ import { readFileSync } from 'node:fs'
 
 const listing = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8' }))[0]
 const files = listing.files.map(file => file.path).sort()
-const required = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'CHANGELOG.md']
+const detailDocs = ['docs/DETAIL.md', 'docs/DETAIL.zh.md']
+// npm includes a README beside the published detail documents automatically.
+const publicDocs = [...detailDocs, 'docs/README.md']
+const required = [
+  'package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'CHANGELOG.md',
+  'locale/en.json', 'locale/zh.json', ...detailDocs,
+]
 const missing = required.filter(file => !files.includes(file))
-const forbidden = files.filter(file => /^(src|tests|scripts|docs)\/|\.env|\.tgz$|node_modules/.test(file))
+const forbidden = files.filter(file => (
+  /^(src|tests|scripts)\/|\.env|\.tgz$|node_modules/.test(file)
+  || (file.startsWith('docs/') && !publicDocs.includes(file))
+))
 const problems = []
 if (missing.length > 0) problems.push(`missing: ${missing.join(', ')}`)
 if (forbidden.length > 0) problems.push(`forbidden: ${forbidden.join(', ')}`)
@@ -19,6 +28,10 @@ const client = readFileSync('lib/client.js', 'utf8')
 if (!client.startsWith('window.__ModuleLoader__.load({')) problems.push('lib/client.js is not a Loader lazy-CJS bundle')
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 if (pkg.dsh?.client?.platform !== 'web' || pkg.dsh?.bundle?.patch === undefined) problems.push('package.json dsh manifest incomplete')
+for (const language of ['en', 'zh']) {
+  const locale = JSON.parse(readFileSync(`locale/${language}.json`, 'utf8'))
+  if (!detailDocs.includes(locale.meta?.detail)) problems.push(`locale/${language}.json has an invalid meta.detail`)
+}
 const gzip = execFileSync('gzip', ['-c', 'lib/client.js']).length
 console.log(`files: ${files.join(', ')}`)
 console.log(`client bundle: ${(client.length / 1024).toFixed(1)} KiB raw, ${(gzip / 1024).toFixed(1)} KiB gzip (budget 250 KiB gzip)`)

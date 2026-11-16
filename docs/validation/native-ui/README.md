@@ -1,6 +1,6 @@
 # 原生构图侧栏复验（Linux Web）
 
-记录日期：2026-11-12。被测改动见[原生构图侧栏设计](../../native-sidebar-design.md)。环境与 [M0 验证记录](../poc/README.md)相同：`@deepseek-ai/dsh@0.2.2-rc.1`（npm 发行版）、Linux（WSL2）、Node 24.19、headless Chromium 1243；隔离的 `DSH_HOME` 与新建 `sbtest` profile；模型为脚本化桩 [`tests/fixtures/mock-llm.mjs`](../../../tests/fixtures/mock-llm.mjs)，未调用真实模型，未读取用户 profile。
+记录日期：2026-11-12。被测改动见[原生构图侧栏设计](../../design/native-sidebar-design.md)。环境与 [M0 验证记录](../poc/README.md)相同：`@deepseek-ai/dsh@0.2.2-rc.1`（npm 发行版）、Linux（WSL2）、Node 24.19、headless Chromium 1243；隔离的 `DSH_HOME` 与新建 `sbtest` profile；模型为脚本化桩 [`tests/fixtures/mock-llm.mjs`](../../../tests/fixtures/mock-llm.mjs)，未调用真实模型，未读取用户 profile。
 
 被测包为 `0.1.0-alpha.1` 预构建 tarball，经 `dsh plugin --profile sbtest add` 安装，安装后的产物与仓库构建逐字节一致。Host 半部未改动，`lib/index.js` 与 2026-11-11 复验的 SHA256 相同（`d09696421e8e…de609`）。
 

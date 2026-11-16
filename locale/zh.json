@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "T3 Code 任务侧栏",
+    "description": "按任务状态、工作区或单列表整理会话。在下方配置自动收起；稍后处理和已处理不会停止任务或删除聊天。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

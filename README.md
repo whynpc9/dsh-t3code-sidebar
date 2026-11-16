@@ -1,72 +1,60 @@
-# DeepSeek Harness T3 Sidebar
+# dsh-t3code-sidebar
 
-`dsh-t3code-sidebar` 为 DeepSeek Harness 提供以任务分区为核心的 Sidebar 插件。界面按原生 **Workspaces** 区域的构图复刻（标题、搜索、视图选项、添加工作区，32px 会话行、悬停卡片与悬停操作），并在“分组方式”中新增默认的 **按状态**：T3 Code 风格的 Pinned、Active、Working、Snoozed、Settled 分区；也可按工作区或单列表查看。
+为 DeepSeek Harness 提供 T3 Code 风格的任务侧栏：保留原生 Workspaces 的构图与操作，把会话按任务状态整理，也可按工作区或单列表查看。
 
-当前阶段：**v0.1-preview（`0.1.0-preview.0`，Linux Web）**，以 npm `preview` 标签发布。M0 四个验证门已在 Linux Web 上通过（[验证记录](docs/validation/poc/README.md)）。状态/工作区/单列表分组、Snooze / 已处理、Host 持久化与自动收起调度、Workspace 级策略、结果确认与策略预览均已实现，并有自动化与 Linux Web 端到端证据（[2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)）。门禁核对、已知限制与未覆盖项见[发行说明与支持矩阵](docs/release.md)。目标运行时为 `@deepseek-ai/dsh` `0.2.2-rc.1`。
+> 当前为 **v0.1-preview**。已在 Linux Web + `@deepseek-ai/dsh` `0.2.2-rc.1` 上验证；macOS Desktop 仅部分验证，Windows 尚未验证。详见[支持矩阵与已知限制](docs/release.md)。
 
-## 文档
+## 功能
 
-| 文档 | 用途 |
-| --- | --- |
-| [产品规格](docs/product-spec.md) | 用户场景、分区规则、范围与验收 |
-| [原生构图侧栏设计](docs/native-sidebar-design.md) | 界面构图、三种分组、行操作、搜索、设置页（取代产品规格中的界面构图部分） |
-| [实现 Spec](docs/implementation-spec.md) | 插件边界、数据模型、状态机、API、持久化、失败恢复 |
-| [时间策略 Spec](docs/time-policy-spec.md) | 自动 Settled、Snooze 到期、PR/限额与自动归档计划 |
-| [开发计划](docs/development-plan.md) | 技术验证、任务依赖、里程碑、执行状态与发布门槛 |
-| [发行说明与支持矩阵](docs/release.md) | 已验证的运行时/平台、发布门禁核对、升级与回滚、已知限制 |
-| [CHANGELOG](CHANGELOG.md) | 版本历史 |
-| [M0 验证记录](docs/validation/poc/README.md) | 实测结论、能力矩阵、截图与端到端结果 |
-| [调研结论与证据索引](docs/research/README.md) | 固定上游版本、可行性、来源 |
+- **三种分组**：按状态（默认）、按工作区、单列表；支持搜索和归档筛选。
+- **五种任务状态**：置顶、待处理、运行中、稍后处理、已处理；空分区自动隐藏。
+- **任务整理**：稍后处理、手动收起、结果确认，以及默认 7 天无活动自动收起。
+- **灵活策略**：自动收起可关闭或改为 1–90 天，支持工作区覆盖和单会话豁免。
+- **原生体验**：会话菜单、工作区管理、中英文、亮暗主题及窄栏跟随 Harness。
 
-## 安装（测试 profile）
+## 安装
 
-预览版已发布到 npm（`preview` 标签）。建议先在新建的测试 profile 中试用：
+建议先在测试 profile 中试用：
 
 ```sh
-dsh plugin --profile <测试 profile> add dsh-t3code-sidebar@preview
-dsh --profile <测试 profile>
+dsh plugin --profile <profile> add dsh-t3code-sidebar@preview
+dsh --profile <profile>
 ```
 
-从源码构建 tarball 安装时，包管理器统一为 pnpm（`packageManager` 字段固定版本，锁文件为 `pnpm-lock.yaml`）：
+卸载后原生侧栏自动恢复，会话与聊天记录不受影响：
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm run verify       # typecheck、测试、构建、pack 检查
-pnpm pack             # 生成 dsh-t3code-sidebar-<version>.tgz
-dsh plugin --profile <测试 profile> add "$PWD/dsh-t3code-sidebar-<version>.tgz"
-dsh --profile <测试 profile>
+dsh plugin --profile <profile> remove dsh-t3code-sidebar
 ```
 
-升级：`plugin add` 对**相同版本号**的 tarball 不做任何更新（dsh 0.2.2-rc.1 实测）。升级测试必须提升 `version`，或先 `remove` 再 `add`。
+升级、回滚和本地 tarball 安装见[发行说明](docs/release.md)。
 
-卸载 / 回滚：`dsh plugin --profile <测试 profile> remove dsh-t3code-sidebar`，回滚即重新 `add` 旧版本 tarball。卸载后原生侧栏恢复，会话与聊天记录不受影响；插件自己的任务元数据（`t3_sidebar` 存储域）保留，重新安装后继续生效。
+## 使用
 
-运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器），设置页显示原因。Host 暂时不可达（断线、5xx）时不会切换到本地预览，而是显示“正在重试”并继续连接 Host。
+- 在侧栏的**视图选项**中切换分组和归档筛选；macOS 可用 `⌘K` 搜索、`⌘O` 添加工作区。
+- 在会话的 **… 菜单**中稍后处理、收起、确认结果或设置自动收起豁免；归档仍使用原生菜单。
+- 在 **插件 → dsh-t3code-sidebar** 中调整自动收起与工作区策略，并预览效果、查看最近变更。侧栏的**视图选项 → 侧栏设置…**可直达。
 
-Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测（alpha.2 及之后的规模、生命周期、权限验证）。macOS Desktop 0.2.2-rc.1 已通过 alpha.0/alpha.1 构建的隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验；alpha.2（含 ⌘K/⌘O 修复）尚未在 Desktop 复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[支持矩阵](docs/release.md)
-
-## 功能概览
-
-- **原生构图**：与原生 Workspaces 区域相同的标题行（会话/工作区 · 搜索 · 视图选项 · 添加工作区）、行、悬停卡片、“展开其余 N 个会话”、空状态与窄栏。
-- **按状态分组（默认）**：五分区按语义事件排序，空分区不显示；Snoozed/Settled 默认折叠并显示数量；折叠分区仍保留当前会话。
-- **按工作区 / 单列表**：置顶在前、其余按最近更新；Snoozed/Settled 会话留在原位并带图标；可添加、重命名、移除工作区，在工作区内新建会话。单列表以 200 行为窗口随滚动增长（5000 会话下保持流畅）。
-- **行操作**：悬停时显示 “…”（原生会话菜单，含归档）、**收起 / 取消收起**（取代原生的归档按钮）、置顶；会话菜单另有“稍后处理（预设/自定义时间）”“此会话不自动收起”。
-- **时间策略**：Host 定时器精确唤醒 Snooze（浏览器关闭也有效，Host 停机后补算）；默认 7 天无活动自动收起，可关闭或修改天数，首次安装给予完整宽限。每个工作区可跟随默认、自定义天数或关闭；规则变严时只给受影响的会话重新计宽限。
-- **结果确认**：可选“保留失败的会话”“保留每个新结果”，直到在会话菜单中“确认此结果”（各窗口共享，区别于个人已读）。
-- **设置页**：在 **插件 → 本插件详情页** 中设置自动收起与工作区覆盖，实时预览草稿的效果（即将收起、下一期限、跳过原因、被保留的结果并可全部确认），查看最近的状态变更；被其他插件遮蔽时说明原因。视图选项菜单的“侧栏设置…”直达。
-- **快捷键**：原生“搜索会话”（⌘K）与“添加工作区”（⌘O）作用于本侧栏。
-- **搜索与筛选**：与原生一致，标题/工作区即时匹配并同时搜索正文（`sessions.search`，显示截断提示）；隐藏 / 显示 / 仅显示已归档。
-- **中英文、亮暗主题**跟随 Harness。
+“稍后处理”和“已处理”只改变侧栏整理状态，不会停止任务、归档会话或删除内容。状态默认由 Host 持久化；Host 不可用时行为见[已知限制](docs/release.md#5-已知限制release-notes-必须列出)。
 
 ## 开发
 
-```text
-src/domain/     纯函数：分区、排序、Snooze 时间、自动收起、命令转换
-src/contracts/  zod schema 与 Typert Remote spec（Client codec 与 Host 校验共用）
-src/host/       Host 服务：存储域、事件折叠、命令队列、调度器、follow 流
-src/client/     浏览器半部：后端选择（Host / 本地）、视图模型、React 组件、文案
-tests/          domain / host / client 单元测试；e2e 脚本与脚本化模型桩
-scripts/        构建（Loader lazy-CJS 封装与签名守卫）、pack 检查
+```sh
+pnpm install --frozen-lockfile
+pnpm run verify  # 类型检查、测试、构建、npm 包检查
+pnpm pack
 ```
 
-端到端测试的完整步骤见 [M0 验证记录 · 复现](docs/validation/poc/README.md#复现)；审批态、快捷键、策略与规模测量的步骤见 [2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。
+- `src/domain/`：状态、排序、时间和命令纯函数
+- `src/contracts/`：共享 schema 与 Remote 契约
+- `src/host/`：持久化、事件处理与调度
+- `src/client/`：后端适配、视图模型和 React 界面
+- `tests/`：单元、组件、集成与端到端测试
+
+## 文档
+
+- [文档索引](docs/README.md)：设计、调研和验证材料入口
+- [发行说明与支持矩阵](docs/release.md)
+- [CHANGELOG](CHANGELOG.md)
+
+[MIT License](LICENSE)

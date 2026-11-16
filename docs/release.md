@@ -1,6 +1,6 @@
 # 发行说明、支持矩阵与发布门禁（R01）
 
-更新：2026-11-16，对应 `0.1.0-preview.0`（v0.1-preview，npm `preview` 标签）。本文是 [开发计划](development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
+更新：2026-11-16，对应 `0.1.0-preview.0`（v0.1-preview，npm `preview` 标签）。本文是 [开发计划](archive/development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
 
 ## 1. 支持矩阵
 
@@ -23,7 +23,7 @@
 
 ## 3. 安装、升级、回滚
 
-见 [README · 安装](../README.md#安装测试-profile)。要点：
+见 [README · 安装](../README.md#安装)。要点：
 
 - 只在新建的测试 profile 中安装预构建 tarball（`pnpm pack` 产物）。
 - `plugin add` 对**相同版本号**的 tarball 是空操作；升级测试必须提升 `version`，或先 `remove` 再 `add`。
@@ -52,7 +52,7 @@
 - 只在 Linux Web + dsh 0.2.2-rc.1 上正式支持；macOS Desktop 为部分验证（M6 未完成），Windows 未验证。
 - 自动 Settled 的真实跨天迁移只由 fake clock 覆盖；读屏（VoiceOver）播报未验收。
 
-- 原生行装饰子槽、手动拖拽排序、工作区树分组不可用（见 [原生构图设计 §9](native-sidebar-design.md)）。
+- 原生行装饰子槽、手动拖拽排序、工作区树分组不可用（见 [原生构图设计 §9](design/native-sidebar-design.md)）。
 - ⌘K / ⌘O 依赖原生 `sidebar.workspaces` 注册注入的请求 store（公开 `ctx.slots.entries`）；若宿主改变该注入形状，快捷键退回无效果而不报错。Linux Web 默认未绑定这两个命令（宿主默认值不含 `web:linux`）。
 - 自动 Settled 的保护以 Host 可见事实为准：turn 之外仍待回答的定时提问经精确投影读取；读取失败时跳过并显示“状态未知”。
 - 浏览器本地预览模式下没有自动 Settled，Snooze 只在浏览器打开时返回。

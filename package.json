@@ -28,6 +28,9 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "locale/",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
     "cordis.patch.yml",
     "LICENSE",
     "README.md",

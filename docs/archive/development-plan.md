@@ -1,5 +1,7 @@
 # DeepSeek Harness T3 Sidebar 开发计划
 
+> 历史资料：本文保留早期任务拆解、估算和执行状态，不再作为当前计划或支持范围维护。当前信息见[文档索引](../README.md)与[发行说明](../release.md)。
+
 版本：Draft 0.2 · 2026-11-09（修订 2026-11-08 初版；同日记录用户决策 Q1–Q5，见第 10 节）。任务分区为默认和首要交付；同一 v0.1 包含项目视图切换及可配置的时间窗口自动 Settled。本文是待执行计划，未完成项不能作为已验证能力宣传。
 
 ## 0. 本次修订要点
@@ -18,7 +20,7 @@
 
 ## 执行状态（2026-11-09，11-11、11-12 更新）
 
-**M0 决策：Go。** 四个验证门在 Linux Web 上通过（G0-C 部分通过，足以支持 v0.1 范围），详见 [M0 验证记录](validation/poc/README.md)。当前代码为 R0 内部 alpha `0.1.0-alpha.0`：单元/服务测试 38 项、端到端 12 项全部通过。
+**M0 决策：Go。** 四个验证门在 Linux Web 上通过（G0-C 部分通过，足以支持 v0.1 范围），详见 [M0 验证记录](../validation/poc/README.md)。当前代码为 R0 内部 alpha `0.1.0-alpha.0`：单元/服务测试 38 项、端到端 12 项全部通过。
 
 关键实测结论（改变了原计划的假设）：
 
@@ -32,7 +34,7 @@
 | D01 纯领域函数 | 完成 | 分区、排序、Snooze 预设/DST、自动收起判定、命令转换；单元测试覆盖 T01–T05、T07、T09 |
 | B01 工程骨架 | 完成 | esbuild 双面构建、Loader 封装、签名守卫、pack 检查、MIT LICENSE |
 | B03 测试宿主 | 部分 | 隔离 `DSH_HOME` 安装流程、脚本化模型桩（新增 `#askbash`/`#delaybash`）、测试专用审批夹具 `tests/fixtures/approval-gate`、规模播种 `scale-seed.mjs`、Playwright 脚本；CI 跑 verify，e2e 仍需本机 Harness 运行时，未进 CI |
-| C01 契约冻结 v1 | 完成 | `src/contracts` 为单一来源；已回写[实现 Spec §4.0/§5.0](implementation-spec.md) 与[时间策略 Spec §0](time-policy-spec.md)；第 9 节待对齐项全部关闭 |
+| C01 契约冻结 v1 | 完成 | `src/contracts` 为单一来源；已回写[实现 Spec §4.0/§5.0](../design/implementation-spec.md) 与[时间策略 Spec §0](../design/time-policy-spec.md)；第 9 节待对齐项全部关闭 |
 | B02 / D03 Host 事实 | 完成（v1） | 活动 waterfall、事件折叠、Pin/Archive、会话头索引 |
 | D02 存储 | 完成（v1） | `t3_sidebar` 存储域（tasks / transitions / global），CAS、每记录收据、审计上限 1000 |
 | D04 同步 | 完成 | baseline + 连续 delta、多窗口一致；2026-11-11（#4）加订阅代次：reset/断档/epoch 变化立即重订阅，旧流与旧代次回复不写状态，非 ready 拒绝写入，回复丢失以原 commandId 恢复 |
@@ -40,24 +42,24 @@
 | U01–U04 任务视图与动作 | 完成（alpha） | 五分区、行状态、当前项定位、原生菜单内的 Snooze/已处理/重新打开、自定义时间对话框 |
 | U05 搜索与筛选 | 完成 | 标题/工作区即时匹配、正文搜索（防抖、取消与迟到丢弃）；A07 竞态由真实 DOM 组件测试覆盖（`tests/client/sidebar.spec.tsx`） |
 | U06 项目视图 | 完成（alpha） | 分组、空项目、新建会话、添加/重命名/移除项目；目录选择用 `pickDirectory` 或路径输入 |
-| U07 键盘/无障碍 | 部分 | Desktop rc.2 已实测当前会话定位、键盘导航、窄窗口、关闭自定义 Snooze 后的焦点、跨分区更新时的菜单以及减少动态效果。VoiceOver 按本轮范围跳过。见 [U07 验收记录](validation/u07/README.md) |
+| U07 键盘/无障碍 | 部分 | Desktop rc.2 已实测当前会话定位、键盘导航、窄窗口、关闭自定义 Snooze 后的焦点、跨分区更新时的菜单以及减少动态效果。VoiceOver 按本轮范围跳过。见 [U07 验收记录](../validation/u07/README.md) |
 | S01 设置与诊断 | 完成 | 设置在插件详情页：后端类型与回退原因、被其他插件遮蔽时点名胜出者（`ctx.slots.entries` 最低 priority）、审计记录 |
-| P01–P04 时间策略 | 完成（v0.1 范围） | Host 默认/Workspace 覆盖/会话豁免，分范围宽限；保留未确认结果/失败与共享“确认此结果”；`previewPolicy` 草稿预览；见[时间策略 Spec §0](time-policy-spec.md) |
+| P01–P04 时间策略 | 完成（v0.1 范围） | Host 默认/Workspace 覆盖/会话豁免，分范围宽限；保留未确认结果/失败与共享“确认此结果”；`previewPolicy` 草稿预览；见[时间策略 Spec §0](../design/time-policy-spec.md) |
 | Q01 | 进行中 | 237 项单元/服务/组件/集成测试；Linux Web 端到端已有主场景、重启和新功能证据；A10 另有真实 Gateway 与浏览器用例 |
 | Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
-| Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
-| R01 | v0.1-preview 就绪 | [CHANGELOG](../CHANGELOG.md)、[发行说明与支持矩阵](release.md)（门禁核对）；npm 包名已确认可用，`0.1.0-preview.0` 以 `preview` 标签发布 |
+| Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](../validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
+| R01 | v0.1-preview 就绪 | [CHANGELOG](../../CHANGELOG.md)、[发行说明与支持矩阵](../release.md)（门禁核对）；npm 包名已确认可用，`0.1.0-preview.0` 以 `preview` 标签发布 |
 | M6 | 部分 | macOS Desktop 0.2.2-rc.1 已通过 #2/#3 的 ⌘Q 重启主线、标题与元数据对照、语义唤醒和到期补算。⌘K / ⌘O 回归已复现。 |
 
-issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交与恢复已有自动化证据。E 已修复 pnpm 11 的 frozen lockfile，统一包管理器并启用 CI。Linux Web 已复验真实 Loader 安装、重启与回退。D 已在 macOS Desktop 上复验扫描后新建并停放、十分钟内 ⌘Q 重启的场景。Desktop 其余通过范围和待验项见[验证记录](validation/poc/README.md)。
+issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交与恢复已有自动化证据。E 已修复 pnpm 11 的 frozen lockfile，统一包管理器并启用 CI。Linux Web 已复验真实 Loader 安装、重启与回退。D 已在 macOS Desktop 上复验扫描后新建并停放、十分钟内 ⌘Q 重启的场景。Desktop 其余通过范围和待验项见[验证记录](../validation/poc/README.md)。
 
-2026-11-12（`0.1.0-alpha.2`）：审批态端到端、A07/A08 自动化、Workspace 级策略（P01）、结果确认与预览（P04）、S01 诊断、C01 回写、⌘K/⌘O 修复、Linux Web 规模测量均已完成，见[验证记录](validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。
+2026-11-12（`0.1.0-alpha.2`）：审批态端到端、A07/A08 自动化、Workspace 级策略（P01）、结果确认与预览（P04）、S01 诊断、C01 回写、⌘K/⌘O 修复、Linux Web 规模测量均已完成，见[验证记录](../validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。
 
-2026-11-13（A10）：隔离 Web profile 验证真实 Gateway 的 guest 拒绝、撤权、未知写入字段和任务 API 关闭，见 [A10 验证记录](validation/a10/README.md)。v0.1-preview 继续补读屏、规模和生命周期证据。Desktop 的规模预算与 20 次启停仍属 M6。
+2026-11-13（A10）：隔离 Web profile 验证真实 Gateway 的 guest 拒绝、撤权、未知写入字段和任务 API 关闭，见 [A10 验证记录](../validation/a10/README.md)。v0.1-preview 继续补读屏、规模和生命周期证据。Desktop 的规模预算与 20 次启停仍属 M6。
 
 ## 1. 输入、交付物和工作方式
 
-输入为[产品规格](product-spec.md)、[实现 Spec](implementation-spec.md)、[时间策略 Spec](time-policy-spec.md)及[固定上游调研](research/README.md)。第一阶段不是画完整 UI，而是交付能独立安装、调用公开 API、撤销覆盖的最小包，验证架构成立。
+输入为[产品规格](../design/product-spec.md)、[实现 Spec](../design/implementation-spec.md)、[时间策略 Spec](../design/time-policy-spec.md)及[固定上游调研](../research/README.md)。第一阶段不是画完整 UI，而是交付能独立安装、调用公开 API、撤销覆盖的最小包，验证架构成立。
 
 v0.1 交付预构建 npm tarball、源代码、锁文件、双语安装/恢复说明、支持版本矩阵、测试报告、GUI 证据及 CHANGELOG。Registry/GitHub 正式发布是实现后的单独发布动作；本次任务只交付规划文档，不发布或初始化远程仓库。
 
