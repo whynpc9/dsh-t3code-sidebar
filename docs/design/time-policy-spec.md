@@ -20,6 +20,8 @@
 | `previewPolicy`（§7） | 已实现 | 不写入；可预览未保存草稿（含保存后将启动的宽限）：一分钟内到期数、下一期限、跳过原因、被保留的结果 |
 | “应用于已存在的超期会话”的显式追溯 | 未实现 | 预览只展示；变严一律给宽限 |
 | 自动 Archived、PR、限额（§5、§6） | 未实现（v0.2/v0.3） | 字段未进入 schema |
+| 低峰时段 Snooze | 已实现 | `src/domain/offpeak.ts`：DeepSeek 高峰时段以 UTC 时间表数据表示，中国法定节假日来自 holiday-cn 静态数据（`src/domain/holidays-cn.ts`）；高峰时段内 Snooze 菜单提供“至低峰时段”（短窗口时另给较长窗口），运行中不提供；记录在 disposition 上标 `origin: 'off-peak'`；Host 按自身时钟重算并校验边界，不符则 `INVALID_TIME`；到期只回到待处理，不自动续跑 |
+| 低峰时段继续（Resume at off-peak） | 已实现 | 低峰时段 Snooze 的显式变体：snooze 命令带 `resume: { prompt }`（仅与 `origin: 'off-peak'` 同用）；Host 校验会话完全空闲（同 `settle()` 的检查）、调用者为 Host owner、`ctx.schedule` 可用（能力 `hostSchedule`），先建一次性 `at` 定时任务投递到该会话，再提交带 `resume: { scheduleId }` 的记录（提交失败则删任务）；记录、receipt（digest 中只存 prompt 的 SHA-256）和审计都不存消息正文；到期前因任何原因离开 Snoozed 时在 `commit` 中统一删除该任务（尽力而为、有限重试），到期则保留由其照常投递 |
 
 ## 1. T3 Code 对照与交付范围
 

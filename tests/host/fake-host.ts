@@ -1,7 +1,8 @@
 /**
  * Minimal Harness Host stand-ins for the t3Sidebar service: an in-memory
  * storage-domain facility (validating records like the real one), a workspace
- * registry, session persistence, and a `workspace/session-activity` provider.
+ * registry, session persistence, a `workspace/session-activity` provider, and
+ * the Host scheduler (`ctx.schedule`).
  */
 import { Context } from '@deepseek-ai/cordis'
 import type { ZodType } from 'zod'
@@ -62,6 +63,40 @@ export class MemoryDomainFacility {
   }
 }
 
+export interface FakeScheduleTask {
+  readonly id: string
+  readonly title: string
+  readonly prompt: string
+  readonly timing: { readonly kind: string; readonly at?: string }
+  readonly target: { readonly kind: string; readonly sessionId?: string }
+}
+
+/** In-memory `ctx.schedule`: records every create and delete. */
+export class FakeSchedule {
+  readonly tasks = new Map<string, FakeScheduleTask>()
+  readonly created: FakeScheduleTask[] = []
+  /** Ids passed to `edit({ action: 'delete' })`, in order (including failed attempts). */
+  readonly deletes: string[] = []
+  failCreate = false
+  /** Number of upcoming delete calls that reject. */
+  failDeletes = 0
+  private seq = 0
+  async create(request: Omit<FakeScheduleTask, 'id'>, actorSessionId?: string): Promise<FakeScheduleTask> {
+    if (actorSessionId !== undefined) throw new Error('t3Sidebar acts for a human caller')
+    if (this.failCreate) throw new Error('schedule store unavailable')
+    if (request.timing.at === undefined || Date.parse(request.timing.at) <= Date.now()) throw new Error('target must be in the future')
+    const task = { ...request, id: `schedule-${++this.seq}` }
+    this.tasks.set(task.id, task)
+    this.created.push(task)
+    return task
+  }
+  async edit(request: { id: string; action: 'delete' }): Promise<{ id: string; deleted?: true; code?: string }> {
+    this.deletes.push(request.id)
+    if (this.failDeletes > 0) { this.failDeletes -= 1; throw new Error('schedule store unavailable') }
+    return this.tasks.delete(request.id) ? { id: request.id, deleted: true } : { id: request.id, code: 'schedule_not_found' }
+  }
+}
+
 export interface FakeHost {
   ctx: Context
   storage: MemoryDomainFacility
@@ -88,6 +123,8 @@ export interface FakeHost {
   opened: string[]
   /** When set, stored-log opens wait for it (a slow disk). */
   replayGate: Promise<void> | null
+  /** The Host scheduler, or null when this Host has none. */
+  schedule: FakeSchedule | null
 }
 
 export interface StoredEvent { type: string; seq: number; time: number; data: unknown }
@@ -102,7 +139,7 @@ export function appendStored(host: FakeHost, sessionId: string, type: string, da
   return event
 }
 
-export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
+export function createFakeHost(storage = new MemoryDomainFacility(), options: { schedule?: boolean } = {}): FakeHost {
   const ctx = new Context()
   const registry: FakeHost['registry'] = {
     pinnedSessionIds: [], archivedSessionIds: [], workspaces: [],
@@ -113,6 +150,8 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   const questions = new Map<string, { callId: string; state: string }[]>()
   ctx.provide('storageDomain', storage)
   ctx.provide('workspaceRegistry', registry)
+  const schedule = options.schedule === false ? null : new FakeSchedule()
+  if (schedule !== null) ctx.provide('schedule', schedule)
   ctx.provide('sessionController', {
     projections: async ({ sessionId }: { sessionId: string }) => {
       if (host.projectionsFail) throw new Error('history unavailable')
@@ -145,5 +184,5 @@ export function createFakeHost(storage = new MemoryDomainFacility()): FakeHost {
   ;(ctx as unknown as { on: (name: string, fn: unknown) => void }).on('workspace/session-activity',
     async ({ sessionId }: { sessionId: string }, next: () => Promise<readonly { kind: string }[]>) =>
       [...(activity.get(sessionId) ?? []).map(kind => ({ kind })), ...await next()])
-  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false, logs: new Map(), replayFail: false, opened: [], replayGate: null })
+  return Object.assign(host, { ctx, storage, registry, activity, headers, questions, duringList: null, projectionsFail: false, logs: new Map(), replayFail: false, opened: [], replayGate: null, schedule })
 }

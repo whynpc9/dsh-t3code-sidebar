@@ -2,17 +2,20 @@
  * This plugin's configuration, rendered on its own page under Plugins
  * (`plugins.bundle.config`, keyed by the package name): where task state is
  * stored (and why this sidebar is not shown, when another plugin shadows it),
- * sidebar display options (the optional Working section),
+ * sidebar display options (the optional Working section and off-peak snooze),
  * the automatic-settle policy with its workspace overrides and a live preview
  * of what it would do, and the recent state changes.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PolicyPreview } from '../../contracts/schema.ts'
-import { MAX_AUTO_SETTLE_DAYS, MIN_AUTO_SETTLE_DAYS, type TimePolicy, type WorkspacePolicyOverride } from '../../domain/types.ts'
+import { DEEPSEEK_SCHEDULE, pricingAt, type OffPeakSchedule } from '../../domain/offpeak.ts'
+import { MINUTE_MS } from '../../domain/time.ts'
+import { DAY_MS, MAX_AUTO_SETTLE_DAYS, MIN_AUTO_SETTLE_DAYS, type TimePolicy, type WorkspacePolicyOverride } from '../../domain/types.ts'
 import type { PolicyDraft } from '../backend.ts'
 import type { Key } from '../locales.ts'
 import type { Runtime, Transition } from '../runtime.ts'
+import { clockLabel } from './Rows.tsx'
 
 const PREVIEW_DEBOUNCE_MS = 300
 /** Skip reasons listed in the preview summary, in display order (others are folded into "state unknown"). */
@@ -22,6 +25,24 @@ const SKIP_ORDER = [
 const UNKNOWN_SKIPS = new Set(['running-unknown', 'activity-unknown', 'pending-unknown', 'result-unknown', 'scope-unknown', 'unknown'])
 /** Upper bound on preview pages "Acknowledge all" walks through (200 held results each). */
 const ACK_MAX_ROUNDS = 50
+
+/**
+ * The schedule's peak blocks as local wall-clock ranges on the UTC day of
+ * `now` (so today's daylight-saving offset applies), e.g. "09:00–12:00, 14:00–18:00".
+ */
+export function localPeakHours(schedule: OffPeakSchedule, now: number): string {
+  const midnight = Math.floor(now / DAY_MS) * DAY_MS
+  const time = (minutes: number) => new Date(midnight + minutes * MINUTE_MS).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return [...schedule.peak].sort((left, right) => left.startMin - right.startMin)
+    .map(window => `${time(window.startMin)}–${time(window.endMin)}`).join(', ')
+}
+
+/** Bundled holiday years: "2026–2027" when consecutive, a list otherwise. */
+export function holidayYearsLabel(years: readonly number[]): string {
+  const sorted = [...years].sort((left, right) => left - right)
+  const consecutive = sorted.every((year, index) => index === 0 || year === sorted[index - 1]! + 1)
+  return consecutive && sorted.length > 1 ? `${sorted[0]}–${sorted[sorted.length - 1]}` : sorted.join(', ')
+}
 
 function reasonKey(reason: string): Key {
   if (reason === 'snooze-expired' || reason === 'idle-timeout') return `reason.${reason}`
@@ -101,6 +122,16 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
   const [preview, setPreview] = useState<PolicyPreview | null>(null)
   const [previewTick, setPreviewTick] = useState(0)
   const [acknowledging, setAcknowledging] = useState(false)
+  // Off-peak status on the Host-corrected clock, re-rendered at the next boundary.
+  const [pricingTick, setPricingTick] = useState(0)
+  const clockNow = Date.now() + backend.clockOffset
+  const pricing = pricingAt(DEEPSEEK_SCHEDULE, clockNow)
+  const boundary = pricing.phase === 'peak' ? pricing.offPeakAt : pricing.peakAt
+  useEffect(() => {
+    if (view !== 'page' || boundary === null) return
+    const timer = setTimeout(() => { setPricingTick(value => value + 1) }, Math.min(Math.max(boundary - clockNow, 0) + 1000, DAY_MS))
+    return () => { clearTimeout(timer) }
+  }, [view, boundary, pricingTick])
 
   // Follow policy changes made elsewhere (another window, a reconnect) while this page is open.
   // Only on a change: re-applying on mount would discard an edit made before the effect ran.
@@ -227,6 +258,26 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
           </span>
           <Switch checked={prefs.workingSection} label={t('settings.workingSection')}
             onChange={(next) => { runtime.prefs.set({ ...runtime.prefs.getSnapshot(), workingSection: next }) }} />
+        </div>
+        <div className="t3sb-settings-row">
+          <span className="t3sb-settings-label">
+            <span>{t('settings.offPeakSnooze')}</span>
+            <span className="t3sb-dialog-note">{t('settings.offPeakSnoozeNote')}</span>
+            <span className="t3sb-dialog-note" data-testid="t3-offpeak-schedule">
+              {t('settings.offPeakHours', { hours: localPeakHours(DEEPSEEK_SCHEDULE, clockNow), years: holidayYearsLabel(DEEPSEEK_SCHEDULE.holidayYears) })}
+              {' '}{t('settings.offPeakChecked', { date: DEEPSEEK_SCHEDULE.verifiedOn })}{' '}
+              <a href={DEEPSEEK_SCHEDULE.source} target="_blank" rel="noreferrer">{t('settings.offPeakSource')}</a>
+            </span>
+            <span className="t3sb-dialog-note" data-testid="t3-offpeak-now">
+              {pricing.phase === 'peak'
+                ? t('settings.offPeakNow.peak', { time: clockLabel(pricing.offPeakAt, clockNow) })
+                : pricing.peakAt === null
+                  ? t('settings.offPeakNow.offPeakOpen')
+                  : t('settings.offPeakNow.offPeak', { time: clockLabel(pricing.peakAt, clockNow) })}
+            </span>
+          </span>
+          <Switch checked={prefs.offPeakSnooze} label={t('settings.offPeakSnooze')}
+            onChange={(next) => { runtime.prefs.set({ ...runtime.prefs.getSnapshot(), offPeakSnooze: next }) }} />
         </div>
       </section>
       {host && (

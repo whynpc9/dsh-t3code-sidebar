@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { derivePlacement, rowStatus } from '../../src/domain/placement.ts'
-import { reconcile, reopen, settle, snooze } from '../../src/domain/commands.ts'
+import { CapabilitiesSchema, CommandActionSchema, TaskRecordSchema } from '../../src/contracts/schema.ts'
+import { attachResume, mergeHistory, reconcile, reopen, resumeRefusal, settle, snooze } from '../../src/domain/commands.ts'
 import { comparatorFor } from '../../src/domain/sort.ts'
 import { HOUR_MS } from '../../src/domain/time.ts'
 import { T0, approval, facts, native, question, record } from './fixtures.ts'
@@ -97,6 +98,107 @@ describe('Snooze', () => {
     expect(derivePlacement(base, r, { pinned: true, archived: false }, T0 + 1)).toBe('pinned')
     expect(r.disposition.kind).toBe('snoozed')
     expect(derivePlacement(base, r, native, T0 + 1)).toBe('snoozed')
+  })
+})
+
+describe('off-peak Snooze', () => {
+  const MONDAY_PEAK = Date.UTC(2026, 10, 16, 2) // Monday 02:00 UTC, inside 01:00–04:00 peak
+  const OFF_PEAK_AT = Date.UTC(2026, 10, 16, 4)
+
+  it('accepts an offered boundary and stores the origin', () => {
+    const result = snooze(record(), facts(), native, OFF_PEAK_AT, MONDAY_PEAK, 'off-peak')
+    expect(result).toMatchObject({ ok: true, record: { disposition: { kind: 'snoozed', until: OFF_PEAK_AT, origin: 'off-peak' } } })
+    const longer = snooze(record(), facts(), native, Date.UTC(2026, 10, 16, 10), MONDAY_PEAK, 'off-peak')
+    expect(longer).toMatchObject({ ok: true, record: { disposition: { origin: 'off-peak' } } })
+  })
+
+  it('refuses a non-boundary deadline and any off-peak snooze issued during off-peak', () => {
+    expect(snooze(record(), facts(), native, OFF_PEAK_AT + 60_000, MONDAY_PEAK, 'off-peak')).toMatchObject({ ok: false, code: 'INVALID_TIME' })
+    expect(snooze(record(), facts(), native, Date.UTC(2026, 10, 16, 6), Date.UTC(2026, 10, 16, 5), 'off-peak'))
+      .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+    expect(snooze(record(), facts(), native, MONDAY_PEAK - 1, MONDAY_PEAK, 'off-peak')).toMatchObject({ ok: false, code: 'INVALID_TIME' })
+  })
+
+  it('leaves ordinary snoozes without an origin', () => {
+    const result = snooze(record(), facts(), native, OFF_PEAK_AT + 60_000, MONDAY_PEAK)
+    if (!result.ok) throw new Error(result.code)
+    expect('origin' in result.record.disposition).toBe(false)
+  })
+
+  it('keeps the origin when replayed history advances the baselines', () => {
+    const result = snooze(record(), facts(), native, OFF_PEAK_AT, MONDAY_PEAK, 'off-peak')
+    if (!result.ok) throw new Error(result.code)
+    const merged = mergeHistory(result.record, [{ type: 'turn/end', seq: 4, time: MONDAY_PEAK - 1000, reason: 'completed' }])
+    expect(merged.disposition).toMatchObject({ kind: 'snoozed', baselineTurnEndSeq: 4, origin: 'off-peak' })
+  })
+
+  it('parses stored records with and without an origin', () => {
+    const result = snooze(record(), facts(), native, OFF_PEAK_AT, MONDAY_PEAK, 'off-peak')
+    if (!result.ok) throw new Error(result.code)
+    expect(TaskRecordSchema.parse(JSON.parse(JSON.stringify(result.record))).disposition).toMatchObject({ origin: 'off-peak' })
+    const legacy = { ...result.record, disposition: { ...result.record.disposition, origin: undefined } }
+    const parsed = TaskRecordSchema.parse(JSON.parse(JSON.stringify(legacy)))
+    expect(parsed.disposition.kind).toBe('snoozed')
+    expect('origin' in parsed.disposition).toBe(false)
+    expect(() => TaskRecordSchema.parse({ ...result.record, disposition: { ...result.record.disposition, origin: 'other' } })).toThrow()
+    expect(CommandActionSchema.parse({ kind: 'snooze', until: OFF_PEAK_AT })).toEqual({ kind: 'snooze', until: OFF_PEAK_AT })
+    expect(CommandActionSchema.parse({ kind: 'snooze', until: OFF_PEAK_AT, origin: 'off-peak' })).toMatchObject({ origin: 'off-peak' })
+    expect(CommandActionSchema.safeParse({ kind: 'snooze', until: OFF_PEAK_AT, origin: 'peak' }).success).toBe(false)
+  })
+})
+
+describe('Resume at off-peak', () => {
+  const MONDAY_PEAK = Date.UTC(2026, 10, 16, 2) // Monday 02:00 UTC, inside 01:00–04:00 peak
+  const OFF_PEAK_AT = Date.UTC(2026, 10, 16, 4)
+
+  it('is allowed only for a fully idle session with an off-peak deadline', () => {
+    expect(resumeRefusal(facts(), 'off-peak')).toBeNull()
+    expect(resumeRefusal(facts(), undefined)).toMatchObject({ ok: false, code: 'INVALID_TIME' })
+    expect(resumeRefusal(facts({ running: true }), 'off-peak')).toMatchObject({ code: 'SESSION_ACTIVE' })
+    expect(resumeRefusal(facts({ activity: ['subagent'] }), 'off-peak')).toMatchObject({ code: 'SESSION_ACTIVE' })
+    expect(resumeRefusal(facts({ activity: ['job'] }), 'off-peak')).toMatchObject({ code: 'SESSION_ACTIVE' })
+    expect(resumeRefusal(facts({ running: 'unknown' }), 'off-peak')).toMatchObject({ code: 'BASELINE_PENDING' })
+    expect(resumeRefusal(facts({ activity: 'unknown' }), 'off-peak')).toMatchObject({ code: 'BASELINE_PENDING' })
+    expect(resumeRefusal(facts({ pending: 'unknown' }), 'off-peak')).toMatchObject({ code: 'BASELINE_PENDING' })
+    expect(resumeRefusal(facts({ pending: [approval] }), 'off-peak')).toMatchObject({ code: 'PENDING_APPROVAL' })
+    expect(resumeRefusal(facts({ pending: [question] }), 'off-peak')).toMatchObject({ code: 'PENDING_INPUT' })
+  })
+
+  it('rides on the off-peak snooze checks (non-boundary deadline, off-peak now)', () => {
+    expect(snooze(record(), facts(), native, OFF_PEAK_AT + 60_000, MONDAY_PEAK, 'off-peak')).toMatchObject({ ok: false, code: 'INVALID_TIME' })
+    expect(snooze(record(), facts(), native, Date.UTC(2026, 10, 16, 6), Date.UTC(2026, 10, 16, 5), 'off-peak'))
+      .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+  })
+
+  it('stores only the schedule id on the snoozed disposition, and the record round-trips', () => {
+    const result = snooze(record(), facts(), native, OFF_PEAK_AT, MONDAY_PEAK, 'off-peak')
+    if (!result.ok) throw new Error(result.code)
+    const resumed = attachResume(result.record, 'schedule-1')
+    expect(resumed.disposition).toEqual({ ...result.record.disposition, resume: { scheduleId: 'schedule-1' } })
+    expect(resumed.revision).toBe(result.record.revision)
+    expect(JSON.stringify(resumed)).not.toContain('Continue')
+    expect(TaskRecordSchema.parse(JSON.parse(JSON.stringify(resumed))).disposition).toMatchObject({ resume: { scheduleId: 'schedule-1' } })
+    // Replayed history keeps it; a wake drops it.
+    const merged = mergeHistory(resumed, [{ type: 'turn/end', seq: 4, time: MONDAY_PEAK - 1000, reason: 'completed' }])
+    expect(merged.disposition).toMatchObject({ resume: { scheduleId: 'schedule-1' } })
+    const woken = reopen(resumed, MONDAY_PEAK + 1000)
+    expect(woken).toMatchObject({ ok: true, record: { disposition: { kind: 'normal' } } })
+    expect(attachResume(record(), 'x').disposition).toEqual({ kind: 'normal' })
+  })
+
+  it('validates the resume action on the wire', () => {
+    const action = { kind: 'snooze', until: OFF_PEAK_AT, origin: 'off-peak', resume: { prompt: '  Continue.  ' } }
+    expect(CommandActionSchema.parse(action)).toEqual({ ...action, resume: { prompt: 'Continue.' } })
+    expect(CommandActionSchema.safeParse({ ...action, origin: undefined }).success).toBe(false)
+    expect(CommandActionSchema.safeParse({ ...action, resume: { prompt: '   ' } }).success).toBe(false)
+    expect(CommandActionSchema.safeParse({ ...action, resume: { prompt: 'x'.repeat(4001) } }).success).toBe(false)
+    expect(CommandActionSchema.safeParse({ ...action, resume: { prompt: 'x'.repeat(4000) } }).success).toBe(true)
+    expect(CommandActionSchema.safeParse({ ...action, resume: { prompt: 'go', extra: 1 } }).success).toBe(false)
+  })
+
+  it('parses capabilities and snapshots from Hosts without the scheduler flag', () => {
+    expect(CapabilitiesSchema.parse({ hostActivity: true, sessionEvents: true, hostPending: false }).hostSchedule).toBe(false)
+    expect(CapabilitiesSchema.parse({ hostActivity: true, sessionEvents: true, hostPending: false, hostSchedule: true }).hostSchedule).toBe(true)
   })
 })
 

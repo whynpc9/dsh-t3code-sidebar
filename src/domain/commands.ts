@@ -3,6 +3,7 @@
  * browser-only fallback) wrap these in a serial, CAS-checked, idempotent
  * command queue; nothing here touches storage.
  */
+import { DEEPSEEK_SCHEDULE, isOffPeakTarget } from './offpeak.ts'
 import { pendingId, reopenReason, wakeReason } from './placement.ts'
 import { validateSnoozeUntil } from './time.ts'
 import type {
@@ -24,6 +25,7 @@ export type TaskErrorCode =
   | 'INVALID_TIME'
   | 'STORAGE_UNAVAILABLE'
   | 'PROTOCOL_MISMATCH'
+  | 'SCHEDULE_UNAVAILABLE'
 
 export type Transition =
   | { readonly ok: true; readonly record: TaskRecord }
@@ -42,14 +44,19 @@ const hasApproval = (facts: TaskFacts): boolean =>
 /**
  * Snooze: allowed while running (it only delays display), refused for pinned
  * or archived sessions, unresolved approvals, unknown baselines and bad times.
+ * An `off-peak` snooze must target a boundary `offPeakSnoozeTargets` offers at
+ * `now` (the deadline is recomputed here, never trusted from the client).
  */
 export function snooze(
-  record: TaskRecord, facts: TaskFacts, native: NativeState, until: number, now: number,
+  record: TaskRecord, facts: TaskFacts, native: NativeState, until: number, now: number, origin?: 'off-peak',
 ): Transition {
   if (native.archived) return fail('ARCHIVED', 'archived sessions cannot be snoozed')
   if (native.pinned) return fail('PINNED', 'unpin the session before snoozing it')
   const timeError = validateSnoozeUntil(until, now)
   if (timeError !== null) return fail('INVALID_TIME', `snooze deadline is ${timeError}`)
+  if (origin === 'off-peak' && !isOffPeakTarget(DEEPSEEK_SCHEDULE, until, now)) {
+    return fail('INVALID_TIME', 'snooze deadline is not an off-peak boundary')
+  }
   if (!facts.pending.known) return fail('BASELINE_PENDING', 'pending interactions are not known yet')
   if (hasApproval(facts)) return fail('PENDING_APPROVAL', 'resolve the approval before snoozing')
   return {
@@ -62,21 +69,50 @@ export function snooze(
         baselinePending: pendingIds(facts),
         baselineTurnEndSeq: record.activity.lastTurnEnd?.seq ?? null,
         baselineUserInputAt: record.activity.lastUserInputAt,
+        ...(origin === undefined ? {} : { origin }),
       },
     }),
   }
+}
+
+/**
+ * Refusal unless the session is known to be fully idle: running, activity and
+ * pending all known, nothing running (turn, subagent, job) and nothing
+ * awaiting the user. Null when idle.
+ */
+function idleRefusal(facts: TaskFacts, verb: string): Transition | null {
+  if (!facts.running.known || !facts.activity.known || !facts.pending.known) {
+    return fail('BASELINE_PENDING', 'session state is still synchronizing')
+  }
+  if (facts.running.value || facts.activity.value.length > 0) return fail('SESSION_ACTIVE', 'the session still has running work')
+  if (hasApproval(facts)) return fail('PENDING_APPROVAL', `resolve the approval before ${verb}`)
+  if (facts.pending.value.length > 0) return fail('PENDING_INPUT', `answer the pending question before ${verb}`)
+  return null
+}
+
+/**
+ * "Resume at off-peak" on top of an accepted snooze: only with an off-peak
+ * deadline and for a session known to be fully idle (the scheduled message
+ * must not land in running work or next to an open question). Null when it
+ * may go ahead; the caller then creates the schedule and {@link attachResume}s it.
+ */
+export function resumeRefusal(facts: TaskFacts, origin: 'off-peak' | undefined): Transition | null {
+  if (origin !== 'off-peak') return fail('INVALID_TIME', 'resuming needs an off-peak deadline')
+  return idleRefusal(facts, 'resuming')
+}
+
+/** The snoozed record with its resume schedule (an id only, never the message). */
+export function attachResume(record: TaskRecord, scheduleId: string): TaskRecord {
+  if (record.disposition.kind !== 'snoozed') return record
+  return { ...record, disposition: { ...record.disposition, resume: { scheduleId } } }
 }
 
 /** Manual settle: only for known-idle sessions with nothing awaiting the user. */
 export function settle(record: TaskRecord, facts: TaskFacts, native: NativeState, now: number): Transition {
   if (native.archived) return fail('ARCHIVED', 'archived sessions cannot be settled')
   if (native.pinned) return fail('PINNED', 'unpin the session before settling it')
-  if (!facts.running.known || !facts.activity.known || !facts.pending.known) {
-    return fail('BASELINE_PENDING', 'session state is still synchronizing')
-  }
-  if (facts.running.value || facts.activity.value.length > 0) return fail('SESSION_ACTIVE', 'the session still has running work')
-  if (hasApproval(facts)) return fail('PENDING_APPROVAL', 'resolve the approval before settling')
-  if (facts.pending.value.length > 0) return fail('PENDING_INPUT', 'answer the pending question before settling')
+  const busy = idleRefusal(facts, 'settling')
+  if (busy !== null) return busy
   return {
     ok: true,
     record: next(record, {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildRows, flatRows, nextFocusIndex, placeOf, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
+  buildRows, flatRows, nextFocusIndex, offPeakResumeOffered, offPeakSnoozeItems, placeOf, requiredWatermark, sanitizeQuery, searchResults, statusSections, watermarkRows, workspaceGroups,
   WATERMARK_BASE, type ModelInputs, type Row, type SessionRow,
 } from '../../src/client/model.ts'
 import { migratePrefs, DEFAULT_PREFS } from '../../src/client/runtime.ts'
-import { quickActionOf } from '../../src/client/components/Rows.tsx'
+import { quickActionOf, taskLine } from '../../src/client/components/Rows.tsx'
 import type { TaskView } from '../../src/contracts/schema.ts'
-import { EMPTY_ACTIVITY, emptyRecord, known } from '../../src/domain/types.ts'
+import { EMPTY_ACTIVITY, emptyRecord, known, type TaskFacts } from '../../src/domain/types.ts'
 
 const NOW = Date.UTC(2026, 10, 9, 12)
 const session = (id: string, patch: Partial<SessionRow> = {}): SessionRow => ({
@@ -241,7 +241,14 @@ describe('quick action (replaces the native Archive button)', () => {
 describe('preferences', () => {
   it('defaults to the status grouping with archived sessions hidden', () => {
     expect(migratePrefs(undefined)).toEqual(DEFAULT_PREFS)
-    expect(DEFAULT_PREFS).toMatchObject({ groupBy: 'status', archivedFilter: 'default', workingSection: false })
+    expect(DEFAULT_PREFS).toMatchObject({ groupBy: 'status', archivedFilter: 'default', workingSection: false, offPeakSnooze: true })
+  })
+
+  it('keeps off-peak snooze on unless explicitly turned off', () => {
+    expect(migratePrefs({ offPeakSnooze: false }).offPeakSnooze).toBe(false)
+    expect(migratePrefs({ offPeakSnooze: true }).offPeakSnooze).toBe(true)
+    expect(migratePrefs({ offPeakSnooze: 'no' }).offPeakSnooze).toBe(true)
+    expect(migratePrefs({ groupBy: 'status' }).offPeakSnooze).toBe(true)
   })
 
   it('keeps the Working section only when explicitly turned on', () => {
@@ -256,7 +263,7 @@ describe('preferences', () => {
       collapsed: { 'tasks:settled': false, 'projects:p:w1': true, 'status:active': true }, lastSeen: { a: 3, b: 'x' },
     })
     expect(migrated).toEqual({
-      groupBy: 'workspace', archivedFilter: 'default', workingSection: false,
+      groupBy: 'workspace', archivedFilter: 'default', workingSection: false, offPeakSnooze: true,
       collapsed: { 'status:settled': false, 'status:active': true }, lastSeen: { a: 3 },
     })
     expect(migratePrefs({ view: 'tasks' }).groupBy).toBe('status')
@@ -285,5 +292,88 @@ describe('Host activity completeness', () => {
     const view: TaskView = { sessionId: 'd', record: emptyRecord('d', 0), activity: null, autoSettleDeadline: null, autoSettleSkip: null }
     const rows = buildRows({ ...base, tasks: new Map([...base.tasks, ['d', view]]), hostActivity: true })
     expect(rows.find(entry => entry.sessionId === 'd')!.facts.activity).toEqual({ known: false })
+  })
+})
+
+describe('off-peak snooze (DeepSeek peak 01:00–04:00 and 06:00–10:00 UTC, Mon–Fri)', () => {
+  const idle: TaskFacts = { running: known(false), pending: known([]), activity: known([]), summary: EMPTY_ACTIVITY }
+  const monday = (hour: number) => Date.UTC(2026, 10, 16, hour)
+  const items = (now: number, facts: TaskFacts = idle, enabled = true) => offPeakSnoozeItems({ facts }, now, enabled)
+
+  it('offers the end of the short early block and the longer window after the late block', () => {
+    expect(items(monday(2))).toEqual([
+      { id: 'snooze.off-peak', label: 'menu.snoozeOffPeak', until: monday(4), action: { kind: 'snooze', until: monday(4), origin: 'off-peak' } },
+      { id: 'snooze.off-peak-long', label: 'menu.snoozeOffPeakLong', until: monday(10), action: { kind: 'snooze', until: monday(10), origin: 'off-peak' } },
+    ])
+  })
+
+  it('offers one target during the late block', () => {
+    expect(items(monday(7))).toEqual([
+      { id: 'snooze.off-peak', label: 'menu.snoozeOffPeak', until: monday(10), action: { kind: 'snooze', until: monday(10), origin: 'off-peak' } },
+    ])
+  })
+
+  it('offers nothing during off-peak, at the weekend, with the preference off, or while the session works', () => {
+    expect(items(monday(5))).toEqual([])
+    expect(items(monday(10))).toEqual([])
+    expect(items(Date.UTC(2026, 10, 21, 2))).toEqual([])
+    expect(items(monday(2), idle, false)).toEqual([])
+    expect(items(monday(2), { ...idle, running: known(true) })).toEqual([])
+    expect(items(monday(7), { ...idle, activity: known(['subagent']) })).toEqual([])
+  })
+})
+
+describe('resume at off-peak (menu offer)', () => {
+  const idle: TaskFacts = { running: known(false), pending: known([]), activity: known([]), summary: EMPTY_ACTIVITY }
+  const host = { kind: 'host', capabilities: { hostSchedule: true } }
+  const peak = Date.UTC(2026, 10, 16, 2)
+  const offered = (facts: TaskFacts = idle, backend = host, now = peak, enabled = true) => offPeakResumeOffered({ facts }, backend, now, enabled)
+
+  it('is offered with the off-peak entries on a Host with the scheduler, for a fully idle session', () => {
+    expect(offered()).toBe(true)
+  })
+
+  it('is not offered off-peak, with the preference off, without the scheduler, or on the local backend', () => {
+    expect(offered(idle, host, Date.UTC(2026, 10, 16, 5))).toBe(false)
+    expect(offered(idle, host, peak, false)).toBe(false)
+    expect(offered(idle, { kind: 'host', capabilities: { hostSchedule: false } })).toBe(false)
+    expect(offered(idle, { kind: 'local', capabilities: { hostSchedule: true } })).toBe(false)
+  })
+
+  it('is not offered unless the session is known to be fully idle', () => {
+    expect(offered({ ...idle, running: known(true) })).toBe(false)
+    expect(offered({ ...idle, running: { known: false } })).toBe(false)
+    expect(offered({ ...idle, activity: known(['job']) })).toBe(false)
+    expect(offered({ ...idle, activity: { known: false } })).toBe(false)
+    expect(offered({ ...idle, pending: { known: false } })).toBe(false)
+    expect(offered({ ...idle, pending: known([{ source: 'userQuestions', key: 'q', kind: 'user-question' }]) })).toBe(false)
+  })
+})
+
+describe('taskLine', () => {
+  const until = Date.UTC(2026, 10, 16, 4)
+  const lineFor = (origin?: 'off-peak', resume?: { scheduleId: string }) => {
+    const view: TaskView = {
+      sessionId: 'c',
+      record: {
+        ...emptyRecord('c', 0), revision: 1,
+        disposition: {
+          kind: 'snoozed', until, setAt: until - 3_600_000, baselinePending: [], baselineTurnEndSeq: null, baselineUserInputAt: null,
+          ...(origin === undefined ? {} : { origin }),
+          ...(resume === undefined ? {} : { resume }),
+        },
+      },
+      activity: [], autoSettleDeadline: null, autoSettleSkip: null,
+    }
+    const row = buildRows({ ...inputs({ now: until - 3_600_000 }), tasks: new Map([['c', view]]) }).find(entry => entry.sessionId === 'c')!
+    const keys: string[] = []
+    taskLine(row, (key) => { keys.push(key); return key }, until - 3_600_000)
+    return keys
+  }
+
+  it('says when an off-peak snooze returns, and keeps the ordinary wording otherwise', () => {
+    expect(lineFor('off-peak')).toEqual(['status.snoozedUntilOffPeak'])
+    expect(lineFor()).toEqual(['status.snoozedUntil'])
+    expect(lineFor('off-peak', { scheduleId: 'schedule-1' })).toEqual(['status.resumesAt'])
   })
 })

@@ -186,6 +186,15 @@ describe('HostBackend generations', () => {
     expect(remote.commands[0]!.input).toMatchObject({ expectedRevision: 1, sessionId: 's1' })
   })
 
+  it('forwards the off-peak origin of a snooze to the Host unchanged', async () => {
+    const backend = start()
+    await ready(backend)
+    const until = Date.UTC(2027, 2, 1, 4)
+    void backend.command('s1', { kind: 'snooze', until, origin: 'off-peak' }, context)
+    await flush()
+    expect(remote.commands[0]!.input).toMatchObject({ action: { kind: 'snooze', until, origin: 'off-peak' } })
+  })
+
   it('keeps the newest policy when two replies arrive in reverse order', async () => {
     const backend = start()
     await ready(backend)

@@ -100,7 +100,9 @@ export function clockLabel(at: number, now: number): string {
 export function taskLine(row: Row, t: Translate, now: number): string | null {
   const disposition = row.record?.disposition
   if (row.placement === 'snoozed' && disposition?.kind === 'snoozed') {
-    return t('status.snoozedUntil', { time: clockLabel(disposition.until, now) })
+    const key = disposition.resume !== undefined ? 'status.resumesAt'
+      : disposition.origin === 'off-peak' ? 'status.snoozedUntilOffPeak' : 'status.snoozedUntil'
+    return t(key, { time: clockLabel(disposition.until, now) })
   }
   if (row.placement === 'settled' && disposition?.kind === 'settled') {
     if (disposition.reason === 'idle-timeout' && disposition.deadline !== undefined && disposition.anchorAt !== undefined) {

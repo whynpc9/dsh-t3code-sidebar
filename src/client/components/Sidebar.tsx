@@ -22,7 +22,7 @@ import {
 import type { Readable } from '../store.ts'
 import type { Prefs, Runtime } from '../runtime.ts'
 import { FlatSessionList } from './FlatSessionList.tsx'
-import { AddWorkspaceDialog, RemoveWorkspaceDialog, RenameWorkspaceDialog, SnoozeDialog } from './Dialogs.tsx'
+import { AddWorkspaceDialog, RemoveWorkspaceDialog, RenameWorkspaceDialog, ResumeDialog, SnoozeDialog } from './Dialogs.tsx'
 import {
   cx, GroupRow, SearchResultRow, SessionRow, workspaceMenuIcons, WorkspaceHoverContent,
   type ContextMenuBindings, type RowEnv,
@@ -146,6 +146,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   const backend = use(runtime.backend)
   const prefs = use(runtime.prefs)
   const snoozeTarget = use(runtime.snoozeRequest)
+  const resumeTarget = use(runtime.resumeRequest)
   const notice = use(runtime.notice)
   const menuTarget = use(runtime.menuTarget)
   const now = useNow(30_000) + backend.clockOffset
@@ -316,8 +317,14 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     runtime.snoozeRequest.set(null)
   }
 
+  const closeResume = (sessionId: string) => {
+    if (runtime.resumeRequest.getSnapshot() !== sessionId) return
+    setSnoozeFocusTarget(sessionId)
+    runtime.resumeRequest.set(null)
+  }
+
   useEffect(() => {
-    if (snoozeFocusTarget === null || snoozeTarget !== null) return
+    if (snoozeFocusTarget === null || snoozeTarget !== null || resumeTarget !== null) return
     // Wait for the host modal to release its focus trap before restoring focus.
     const frame = requestAnimationFrame(() => {
       const rows = listArea.current?.querySelectorAll<HTMLElement>('.t3sb-session-row[data-session-id]') ?? []
@@ -330,7 +337,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
       setSnoozeFocusTarget(null)
     })
     return () => { cancelAnimationFrame(frame) }
-  }, [snoozeFocusTarget, snoozeTarget])
+  }, [snoozeFocusTarget, snoozeTarget, resumeTarget])
 
   const locateNotice = (
     <div className="t3sb-locate">
@@ -584,6 +591,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
 
       {snoozeTarget !== null && <SnoozeDialog key={snoozeTarget} runtime={runtime} sessionId={snoozeTarget} now={now}
         onClose={() => { closeSnooze(snoozeTarget) }} />}
+      {resumeTarget !== null && <ResumeDialog key={resumeTarget} runtime={runtime} sessionId={resumeTarget}
+        onClose={() => { closeResume(resumeTarget) }} />}
       {workspaceDialog?.kind === 'add' && <AddWorkspaceDialog runtime={runtime} onClose={() => { setWorkspaceDialog(null) }} />}
       {workspaceDialog?.kind === 'rename' && (
         <RenameWorkspaceDialog runtime={runtime} workspaceId={workspaceDialog.workspaceId} title={workspaceDialog.title} onClose={() => { setWorkspaceDialog(null) }} />

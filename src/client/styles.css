@@ -941,6 +941,28 @@
   color: var(--dsw-alias-label-dimmed);
 }
 
+.t3sb-textarea {
+  height: auto;
+  min-height: 72px;
+  resize: vertical;
+  line-height: 20px;
+}
+
+.t3sb-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.t3sb-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
 .t3sb-error {
   margin: 0;
   font-size: 12px;

@@ -5,14 +5,16 @@
  * and the native "show more" watermark. Every grouping reads the same rows, so
  * a session is placed identically everywhere.
  */
-import { derivePlacement, rowStatus, type RowStatus } from '../domain/placement.ts'
+import { DEEPSEEK_SCHEDULE, offPeakSnoozeTargets, type OffPeakSchedule } from '../domain/offpeak.ts'
+import { derivePlacement, isWorking, rowStatus, type RowStatus } from '../domain/placement.ts'
 import { effectivePolicy, heldResult } from '../domain/policy.ts'
 import { comparatorFor, type SortInput } from '../domain/sort.ts'
 import {
   EMPTY_ACTIVITY, PLACEMENTS, known, unknown,
   type NativeState, type PendingSignal, type Placement, type TaskFacts, type TaskRecord, type TimePolicy,
 } from '../domain/types.ts'
-import type { TaskView } from '../contracts/schema.ts'
+import type { CommandAction, TaskView } from '../contracts/schema.ts'
+import type { Key } from './locales.ts'
 
 /** Structural view of `SessionSummary` (api-session-controller 0.2.2-rc.1). */
 export interface SessionRow {
@@ -456,4 +458,48 @@ export function autoSettleApplies(row: Pick<Row, 'workspaceId'>, policy: TimePol
 /** Whether rows may treat a session without a Host view as having no background work (see `ModelInputs.hostActivity`). */
 export function hostActivityKnown(backend: { readonly kind: string; readonly status: string; readonly capabilities: { readonly hostActivity: boolean } }): boolean {
   return backend.kind === 'host' && backend.status === 'ready' && backend.capabilities.hostActivity
+}
+
+/** One "Until off-peak" entry of the Snooze submenu; the label takes `{ time }`. */
+export interface OffPeakSnoozeItem {
+  readonly id: 'snooze.off-peak' | 'snooze.off-peak-long'
+  readonly label: Key
+  readonly until: number
+  readonly action: CommandAction
+}
+
+/**
+ * The off-peak Snooze entries for one session at `now` (the Host-corrected
+ * clock): the end of the current peak block, plus a longer window when that one
+ * is short. None during off-peak, with the preference off, or while the session
+ * is working (the agent would keep spending peak-priced tokens while hidden).
+ * Each deadline is taken unchanged from the schedule, as the backends re-check it.
+ */
+export function offPeakSnoozeItems(
+  row: Pick<Row, 'facts'>, now: number, enabled: boolean, schedule: OffPeakSchedule = DEEPSEEK_SCHEDULE,
+): OffPeakSnoozeItem[] {
+  if (!enabled || isWorking(row.facts)) return []
+  return offPeakSnoozeTargets(schedule, now).map(target => ({
+    id: target.kind === 'next' ? 'snooze.off-peak' : 'snooze.off-peak-long',
+    label: target.kind === 'next' ? 'menu.snoozeOffPeak' : 'menu.snoozeOffPeakLong',
+    until: target.until,
+    action: { kind: 'snooze', until: target.until, origin: 'off-peak' },
+  }))
+}
+
+/**
+ * Whether the Snooze submenu offers "Resume at off-peak…" for one session: only
+ * where the "Until off-peak" entries show, on a Host that reaches the Harness
+ * scheduler, and for a session known to be fully idle (nothing running, no
+ * background work, nothing awaiting the user). The Host re-checks all of it.
+ */
+export function offPeakResumeOffered(
+  row: Pick<Row, 'facts'>,
+  backend: { readonly kind: string; readonly capabilities: { readonly hostSchedule: boolean } },
+  now: number, enabled: boolean, schedule: OffPeakSchedule = DEEPSEEK_SCHEDULE,
+): boolean {
+  if (backend.kind !== 'host' || !backend.capabilities.hostSchedule) return false
+  if (offPeakSnoozeItems(row, now, enabled, schedule).length === 0) return false
+  const { running, activity, pending } = row.facts
+  return running.known && !running.value && activity.known && activity.value.length === 0 && pending.known && pending.value.length === 0
 }
