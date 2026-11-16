@@ -77,12 +77,20 @@ describe('rows', () => {
 
 describe('status grouping', () => {
   it('places every visible session in exactly one section and omits empty sections', () => {
-    const sections = statusSections(buildRows(inputs()), 'default')
+    const sections = statusSections(buildRows(inputs()), 'default', { workingSection: true })
     expect(sections.map(section => section.key)).toEqual(['pinned', 'active', 'working', 'snoozed'])
     const byKey = Object.fromEntries(sections.map(section => [section.key, ids(section.rows)]))
     expect(byKey).toEqual({ pinned: ['d'], active: ['cur', 'a'], working: ['b'], snoozed: ['c'] })
     const all = sections.flatMap(section => ids(section.rows))
     expect(new Set(all).size).toBe(all.length)
+  })
+
+  it('keeps working sessions in Active unless the Working section is on', () => {
+    const rows = buildRows(inputs())
+    const sections = statusSections(rows, 'default')
+    expect(sections.map(section => section.key)).toEqual(['pinned', 'active', 'snoozed'])
+    expect(ids(sections.find(section => section.key === 'active')!.rows).sort()).toEqual(['a', 'b', 'cur'])
+    expect(statusSections(rows, 'default', { workingSection: false })).toEqual(sections)
   })
 
   it('adds an Archived section when archived sessions are shown, and only it when only archived are', () => {
@@ -233,7 +241,13 @@ describe('quick action (replaces the native Archive button)', () => {
 describe('preferences', () => {
   it('defaults to the status grouping with archived sessions hidden', () => {
     expect(migratePrefs(undefined)).toEqual(DEFAULT_PREFS)
-    expect(DEFAULT_PREFS).toMatchObject({ groupBy: 'status', archivedFilter: 'default' })
+    expect(DEFAULT_PREFS).toMatchObject({ groupBy: 'status', archivedFilter: 'default', workingSection: false })
+  })
+
+  it('keeps the Working section only when explicitly turned on', () => {
+    expect(migratePrefs({ workingSection: true }).workingSection).toBe(true)
+    expect(migratePrefs({ workingSection: 'yes' }).workingSection).toBe(false)
+    expect(migratePrefs({ groupBy: 'status' }).workingSection).toBe(false)
   })
 
   it('migrates the R0 alpha shape', () => {
@@ -242,7 +256,7 @@ describe('preferences', () => {
       collapsed: { 'tasks:settled': false, 'projects:p:w1': true, 'status:active': true }, lastSeen: { a: 3, b: 'x' },
     })
     expect(migrated).toEqual({
-      groupBy: 'workspace', archivedFilter: 'default',
+      groupBy: 'workspace', archivedFilter: 'default', workingSection: false,
       collapsed: { 'status:settled': false, 'status:active': true }, lastSeen: { a: 3 },
     })
     expect(migratePrefs({ view: 'tasks' }).groupBy).toBe('status')

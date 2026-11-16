@@ -2,6 +2,7 @@
  * This plugin's configuration, rendered on its own page under Plugins
  * (`plugins.bundle.config`, keyed by the package name): where task state is
  * stored (and why this sidebar is not shown, when another plugin shadows it),
+ * sidebar display options (the optional Working section),
  * the automatic-settle policy with its workspace overrides and a live preview
  * of what it would do, and the recent state changes.
  */
@@ -92,6 +93,7 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
   const backend = useSyncExternalStore(runtime.backend.subscribe, runtime.backend.getSnapshot)
   const workspaces = useSyncExternalStore(runtime.workspaces.subscribe, runtime.workspaces.getSnapshot)
   const slot = useSyncExternalStore(runtime.slotStatus.subscribe, runtime.slotStatus.getSnapshot)
+  const prefs = useSyncExternalStore(runtime.prefs.subscribe, runtime.prefs.getSnapshot)
   const host = backend.kind === 'host'
   const [draft, setDraft] = useState<Draft>(() => draftOf(backend.policy))
   const [message, setMessage] = useState<string | null>(null)
@@ -215,6 +217,17 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
             {slot.winner === null ? t('settings.slot.shadowedUnknown') : t('settings.slot.shadowed', { name: slot.winner })}
           </p>
         )}
+      </section>
+      <section data-testid="t3-display-settings">
+        <h3>{t('settings.display')}</h3>
+        <div className="t3sb-settings-row">
+          <span className="t3sb-settings-label">
+            <span>{t('settings.workingSection')}</span>
+            <span className="t3sb-dialog-note">{t('settings.workingSectionNote')}</span>
+          </span>
+          <Switch checked={prefs.workingSection} label={t('settings.workingSection')}
+            onChange={(next) => { runtime.prefs.set({ ...runtime.prefs.getSnapshot(), workingSection: next }) }} />
+        </div>
       </section>
       {host && (
         <section>

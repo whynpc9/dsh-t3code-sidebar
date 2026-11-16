@@ -9,7 +9,7 @@ A T3 Code-style task sidebar for DeepSeek Harness. It preserves the native Works
 ## Features
 
 - **Three layouts**: by status (default), by workspace, or one list, with search and archive filters.
-- **Five task states**: Pinned, Active, Working, Snoozed, and Settled; empty sections stay hidden.
+- **Task sections**: Pinned, Active, Snoozed, and Settled; empty sections stay hidden. An optional **Working** section (off by default) folds running sessions out of Active; they return to Active when they need you.
 - **Task organization**: Snooze, manual settling, result acknowledgement, and automatic settling after 7 days of inactivity by default.
 - **Flexible policies**: disable automatic settling or set a window of 1–90 days, with workspace overrides and per-session exemptions.
 - **Native experience**: session menus, workspace management, English and Chinese, light and dark themes, and the narrow Harness rail.
@@ -35,7 +35,7 @@ See the [release notes](docs/release.md) for upgrades, rollback, and local tarba
 
 - Use **View options** in the sidebar to change grouping and archive filters. On macOS, press `⌘K` to search and `⌘O` to add a workspace.
 - Use a session's **… menu** to snooze, settle, acknowledge a result, or exempt it from automatic settling. Archiving remains a native menu action.
-- Open **Plugins → dsh-t3code-sidebar** to configure automatic settling and workspace policies, preview their effects, and review recent changes. **View options → Sidebar settings…** in the sidebar opens the same page.
+- Open **Plugins → dsh-t3code-sidebar** to turn on the Working section, configure automatic settling and workspace policies, preview their effects, and review recent changes. **View options → Sidebar settings…** in the sidebar opens the same page.
 
 Snoozing and settling only change how sessions are organized in the sidebar. They do not stop tasks, archive sessions, or delete content. The Host persists task state by default; see [known limitations](docs/release.md#5-known-limitations) for behavior when it is unavailable.
 

@@ -14,6 +14,11 @@ export interface Prefs {
   readonly groupBy: GroupBy
   /** Archived-row visibility. */
   readonly archivedFilter: ArchivedFilter
+  /**
+   * Fold working sessions into their own Working section. Off by default: they
+   * stay in Active. Either way a session returns to Active when it needs you.
+   */
+  readonly workingSection: boolean
   /** Explicit collapse state: `status:<section>` or `workspace:<group key>` → collapsed. */
   readonly collapsed: Readonly<Record<string, boolean>>
   /** Per-browser read marker: last turn-end seq seen in the main view. */
@@ -23,6 +28,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = {
   groupBy: 'status',
   archivedFilter: 'default',
+  workingSection: false,
   collapsed: {},
   lastSeen: {},
 }
@@ -46,6 +52,7 @@ export function migratePrefs(raw: unknown): Prefs {
   const archivedFilter = ARCHIVED_FILTERS.includes(raw['archivedFilter'] as ArchivedFilter)
     ? raw['archivedFilter'] as ArchivedFilter
     : 'default'
+  const workingSection = raw['workingSection'] === true
   const collapsed: Record<string, boolean> = {}
   if (isRecord(raw['collapsed'])) {
     for (const [key, value] of Object.entries(raw['collapsed'])) {
@@ -58,7 +65,7 @@ export function migratePrefs(raw: unknown): Prefs {
   if (isRecord(raw['lastSeen'])) {
     for (const [key, value] of Object.entries(raw['lastSeen'])) if (typeof value === 'number') lastSeen[key] = value
   }
-  return { groupBy, archivedFilter, collapsed, lastSeen }
+  return { groupBy, archivedFilter, workingSection, collapsed, lastSeen }
 }
 
 export interface SearchPage {

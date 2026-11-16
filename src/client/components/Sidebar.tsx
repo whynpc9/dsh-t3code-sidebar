@@ -390,7 +390,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   let body: ReactNode
   let empty = false
   if (groupBy === 'status') {
-    const sections = statusSections(rows, archivedFilter)
+    const sections = statusSections(rows, archivedFilter, { workingSection: prefs.workingSection })
     empty = sections.length === 0
     body = sections.map((section) => {
       const key = `status:${section.key}`
