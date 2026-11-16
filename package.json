@@ -1,8 +1,22 @@
 {
   "name": "dsh-t3code-sidebar",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-preview.0",
   "description": "T3 Code style task sidebar for DeepSeek Harness, composed like the native Workspaces browser: group sessions by status (Pinned / Active / Working / Snoozed / Settled), by workspace, or in one list.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/whynpc9/dsh-t3code-sidebar.git"
+  },
+  "homepage": "https://github.com/whynpc9/dsh-t3code-sidebar#readme",
+  "bugs": {
+    "url": "https://github.com/whynpc9/dsh-t3code-sidebar/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "sidebar"
+  ],
   "packageManager": "pnpm@11.20.0",
   "type": "module",
   "main": "lib/index.js",
@@ -21,6 +35,9 @@
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "publishConfig": {
+    "tag": "preview"
   },
   "dsh": {
     "bundle": {
@@ -47,7 +64,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "TZ=America/New_York vitest run",
     "pack:check": "node scripts/pack-check.mjs",
-    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check"
+    "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check",
+    "prepublishOnly": "pnpm run verify",
+    "release:preview": "pnpm publish --tag preview"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",

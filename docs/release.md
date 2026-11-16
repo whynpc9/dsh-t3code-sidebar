@@ -1,6 +1,6 @@
 # 发行说明、支持矩阵与发布门禁（R01）
 
-更新：2026-11-14，对应 `0.1.0-alpha.2`。本文是 [开发计划](development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
+更新：2026-11-16，对应 `0.1.0-preview.0`（v0.1-preview，npm `preview` 标签）。本文是 [开发计划](development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
 
 ## 1. 支持矩阵
 
@@ -8,7 +8,7 @@
 
 | 运行时 | 平台 | 插件版本 | 状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web（WSL2，headless Chromium 1243） | 0.1.0-alpha.2 | **已验证**：安装、主场景、Host 重启、审批态、快捷键、Workspace 策略与结果确认、规模测量 | [验证记录 · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
+| `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web（WSL2，headless Chromium 1243） | 0.1.0-alpha.2 → 0.1.0-preview.0 | **已验证**：安装、主场景、Host 重启、审批态、快捷键、Workspace 策略与结果确认、规模与生命周期（[Q02/Q03](validation/q02-q03/README.md)）、权限撤回（[A10](validation/a10/README.md)） | [验证记录 · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
 | `@deepseek-ai/dsh` 0.2.2-rc.1 | macOS Desktop 26.6.2（arm64，Electron 44.7） | 0.1.0-alpha.0 / alpha.1 构建 | **部分验证**（#2/#3 ⌘Q 重启主线、卸载/重装/升级/回退、竞争插件）；alpha.2 的 ⌘K/⌘O 修复**未在 Desktop 复验** | [验证记录 · macOS Desktop](validation/poc/README.md#2026-11-11-macos-desktop-复验issue-4) |
 | 0.2.2-rc.1 以外的版本 | 任意 | — | 未验证 | — |
 | Windows Desktop / Windows Web | — | — | 未验证 | — |
@@ -18,7 +18,7 @@
 | 层 | 出口条件 | 状态 |
 | --- | --- | --- |
 | R0 内部 alpha | 测试 profile 可安装；任务视图、原生动作、手动 Snooze/Settled | 已达成 |
-| v0.1-preview（Linux Web） | Linux Web 上 F01–F11、A01–A12、T01–T09、T12 时间部分全部有证据 | **接近**：剩余见第 4 节 |
+| v0.1-preview（Linux Web） | Linux Web 上 F01–F11、A01–A12、T01–T09、T12 时间部分全部有证据 | **发布 `0.1.0-preview.0`**：各项均有证据，未覆盖部分见第 4、5 节 |
 | v0.1（Web + Desktop） | preview 基础上 macOS Desktop 安装、卸载与 GUI 验收 | 未达成：Desktop 复验（M6）未完成 |
 
 ## 3. 安装、升级、回滚
@@ -43,9 +43,14 @@
 | T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |
 | Q03 生命周期与重复启停 | **Linux Web 功能通过** | 安装、升级、回退、卸载、重装、同槽竞争、Host 服务缺失和 20 次真实 Loader 启停已验证。100 次复验中，停用后的任务 DOM 和 follow 流归零，浏览器堆仍有增长，主要来自 V8 编译。断网和跨长时间段场景按本轮范围跳过。见 [Q03 实测](validation/q02-q03/README.md#q03--安装冲突与启停)。 |
 | 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |
-| npm 包名可用性 | 未确认 | 正式发布前确认 `dsh-t3code-sidebar` 在 registry 上可用 |
+| npm 包名可用性 | **已确认** | 2026-11-16 `npm view dsh-t3code-sidebar` 返回 404，名称未被占用 |
+| 发布流程 | 已配置 | 用 `pnpm run release:preview`（即 `pnpm publish --tag preview`）发布，预览版不占用 `latest`。pnpm 11 不读取 `publishConfig.tag`，直接 `pnpm publish` 会标为 `latest`，`prepublishOnly` 也拿不到标签，无法拦截。`publishConfig.tag` 只作为 `npm publish` 的兜底。`prepublishOnly` 运行 `pnpm run verify` |
+| 从 registry 安装 | **发布后待验证** | 发布后在新测试 profile 执行 `dsh plugin --profile <p> add dsh-t3code-sidebar@preview`，确认 Host 与 Client 两半均加载；用 `npm view dsh-t3code-sidebar dist-tags` 核对 `preview` 指向 `0.1.0-preview.0` |
 
 ## 5. 已知限制（release notes 必须列出）
+
+- 只在 Linux Web + dsh 0.2.2-rc.1 上正式支持；macOS Desktop 为部分验证（M6 未完成），Windows 未验证。
+- 自动 Settled 的真实跨天迁移只由 fake clock 覆盖；读屏（VoiceOver）播报未验收。
 
 - 原生行装饰子槽、手动拖拽排序、工作区树分组不可用（见 [原生构图设计 §9](native-sidebar-design.md)）。
 - ⌘K / ⌘O 依赖原生 `sidebar.workspaces` 注册注入的请求 store（公开 `ctx.slots.entries`）；若宿主改变该注入形状，快捷键退回无效果而不报错。Linux Web 默认未绑定这两个命令（宿主默认值不含 `web:linux`）。

@@ -2,7 +2,7 @@
 
 `dsh-t3code-sidebar` 为 DeepSeek Harness 提供以任务分区为核心的 Sidebar 插件。界面按原生 **Workspaces** 区域的构图复刻（标题、搜索、视图选项、添加工作区，32px 会话行、悬停卡片与悬停操作），并在“分组方式”中新增默认的 **按状态**：T3 Code 风格的 Pinned、Active、Working、Snoozed、Settled 分区；也可按工作区或单列表查看。
 
-当前阶段：**R0 内部 alpha（`0.1.0-alpha.2`）**。M0 四个验证门已在 Linux Web 上通过（[验证记录](docs/validation/poc/README.md)）。状态/工作区/单列表分组、Snooze / 已处理、Host 持久化与自动收起调度、Workspace 级策略、结果确认与策略预览均已实现，并有自动化与 Linux Web 端到端证据（[2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)）。v0.1-preview 尚未达到完整验收，剩余门禁见[发行说明与支持矩阵](docs/release.md)。目标运行时为 `@deepseek-ai/dsh` `0.2.2-rc.1`。
+当前阶段：**v0.1-preview（`0.1.0-preview.0`，Linux Web）**，以 npm `preview` 标签发布。M0 四个验证门已在 Linux Web 上通过（[验证记录](docs/validation/poc/README.md)）。状态/工作区/单列表分组、Snooze / 已处理、Host 持久化与自动收起调度、Workspace 级策略、结果确认与策略预览均已实现，并有自动化与 Linux Web 端到端证据（[2026-11-12 复验](docs/validation/poc/README.md#2026-11-12-linux-web-复验alpha2)）。门禁核对、已知限制与未覆盖项见[发行说明与支持矩阵](docs/release.md)。目标运行时为 `@deepseek-ai/dsh` `0.2.2-rc.1`。
 
 ## 文档
 
@@ -20,9 +20,14 @@
 
 ## 安装（测试 profile）
 
-插件尚未发布到 npm。请只在新建的测试 profile 中安装预构建 tarball：
+预览版已发布到 npm（`preview` 标签）。建议先在新建的测试 profile 中试用：
 
-包管理器统一为 pnpm（`packageManager` 字段固定版本，锁文件为 `pnpm-lock.yaml`）：
+```sh
+dsh plugin --profile <测试 profile> add dsh-t3code-sidebar@preview
+dsh --profile <测试 profile>
+```
+
+从源码构建 tarball 安装时，包管理器统一为 pnpm（`packageManager` 字段固定版本，锁文件为 `pnpm-lock.yaml`）：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -38,7 +43,7 @@ dsh --profile <测试 profile>
 
 运维开关：以 `DSH_T3_SIDEBAR_HOST=off` 启动时跳过 Host 服务，侧栏退回“浏览器本地预览”（任务状态只存在当前浏览器），设置页显示原因。Host 暂时不可达（断线、5xx）时不会切换到本地预览，而是显示“正在重试”并继续连接 Host。
 
-Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测 alpha.2。macOS Desktop 0.2.2-rc.1 已通过 alpha.0/alpha.1 构建的隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验；alpha.2（含 ⌘K/⌘O 修复）尚未在 Desktop 复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[支持矩阵](docs/release.md)
+Linux Web（WSL2）已在 dsh 0.2.2-rc.1 上实测（alpha.2 及之后的规模、生命周期、权限验证）。macOS Desktop 0.2.2-rc.1 已通过 alpha.0/alpha.1 构建的隔离 profile 安装和 #2/#3 的 ⌘Q 重启复验；alpha.2（含 ⌘K/⌘O 修复）尚未在 Desktop 复验，M6 完整验收仍待完成。其他 `engines.dsh` 范围内的版本尚待实测。[支持矩阵](docs/release.md)
 
 ## 功能概览
 
