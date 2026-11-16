@@ -228,6 +228,18 @@ describe('T3SidebarService', () => {
       }
     })
 
+    it('deletes the schedule on human input to a pinned session, keeping its frozen Snooze', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      host.registry.pinnedSessionIds.push('s1')
+      emit(host, 'user/message', 10, { role: 'user', source: { kind: 'user' } })
+      await settleDeletes()
+      const disposition = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!.record.disposition
+      expect(disposition).toMatchObject({ kind: 'snoozed', until: OFF, origin: 'off-peak' })
+      expect(disposition).not.toHaveProperty('resume')
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+    })
+
     it('leaves the schedule alone when the snooze expires (it fires at the same instant)', async () => {
       const { service, host } = await boot()
       await service.command(resume())

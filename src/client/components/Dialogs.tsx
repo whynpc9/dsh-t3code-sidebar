@@ -66,9 +66,10 @@ export function SnoozeDialog({ runtime, sessionId, now, onClose }: {
 
 /**
  * "Resume at off-peak": snooze until an off-peak boundary and have the Harness
- * send a message then. Targets come from the Host-corrected clock and are
- * recomputed on submit; the Host validates everything again (after the peak
- * block ended it answers INVALID_TIME, shown here).
+ * send a message then. Targets come from the Host-corrected clock when the
+ * dialog opens and are submitted as shown, never silently swapped for a later
+ * boundary; the Host validates everything again (once the shown instant is no
+ * longer offered it answers INVALID_TIME, shown here).
  */
 export function ResumeDialog({ runtime, sessionId, onClose }: {
   runtime: Runtime
@@ -89,8 +90,8 @@ export function ResumeDialog({ runtime, sessionId, onClose }: {
     t(target.kind === 'next' ? 'resume.next' : 'resume.long', { time: clockLabel(target.until, shownAt) })
   const submit = async () => {
     if (prompt.trim() === '' || busy) return
-    const chosen = offPeakSnoozeTargets(DEEPSEEK_SCHEDULE, clockNow()).find(target => target.kind === choice)
-      ?? targets.find(target => target.kind === choice)
+    // Send exactly the instant on screen; once it is no longer offered the Host answers INVALID_TIME.
+    const chosen = targets.find(target => target.kind === choice)
     if (chosen === undefined) { setError(errorText(t, 'INVALID_TIME')); return }
     setBusy(true)
     const result = await runtime.command(sessionId, { kind: 'snooze', until: chosen.until, origin: 'off-peak', resume: { prompt: prompt.trim() } })

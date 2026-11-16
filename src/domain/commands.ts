@@ -279,6 +279,14 @@ export function reconcile(record: TaskRecord, facts: TaskFacts, native: NativeSt
     if (reason !== null) {
       changed = { disposition: { kind: 'normal' }, lastSnoozeWakeAt: reason === 'expired' ? disposition.until : now }
     }
+  } else if (disposition.kind === 'snoozed' && disposition.resume !== undefined) {
+    // Pinned: the Snooze itself stays frozen, but once the user has taken over
+    // the scheduled message must not arrive. Dropping it lets `commit` delete it.
+    const reason = wakeReason(disposition, facts, now)
+    if (reason !== null && reason !== 'expired') {
+      const { resume: _dropped, ...kept } = disposition
+      changed = { disposition: kept }
+    }
   } else if (disposition.kind === 'settled' && !native.pinned) {
     if (reopenReason(disposition, facts) !== null) changed = { disposition: { kind: 'normal' } }
   }

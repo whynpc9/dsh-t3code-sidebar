@@ -101,7 +101,7 @@ describe('ResumeDialog', () => {
     expect(button(view, 'resume.confirm').disabled).toBe(false)
   })
 
-  it('recomputes the target on submit: after the peak block ended the Host decides', async () => {
+  it('sends the shown target after the peak block ended and lets the Host refuse it', async () => {
     vi.useFakeTimers({ now: monday(3), toFake: ['Date'] })
     const runtime = fakeRuntime({ backend: { clockOffset: 0 } })
     const command = vi.mocked(runtime.command).mockResolvedValue(refused('INVALID_TIME'))
@@ -110,6 +110,17 @@ describe('ResumeDialog', () => {
     await act(async () => { button(view, 'resume.confirm').click() })
     expect(command).toHaveBeenCalledWith('s1', expect.objectContaining({ until: monday(4), origin: 'off-peak' }))
     expect(view.querySelector('[role="alert"]')!.textContent).toBe('error.generic(code=INVALID_TIME)') // the echo locale has no copy, so errorText falls back
+  })
+
+  it('submits the time on screen even when a later peak block offers another boundary', async () => {
+    vi.useFakeTimers({ now: monday(3), toFake: ['Date'] })
+    const runtime = fakeRuntime({ backend: { clockOffset: 0 } })
+    const command = vi.mocked(runtime.command).mockResolvedValue(refused('INVALID_TIME'))
+    const view = render(runtime)
+    vi.setSystemTime(monday(7)) // next peak block: its "next" boundary would be 10:00, not the 04:00 shown
+    await act(async () => { button(view, 'resume.confirm').click() })
+    expect(command).toHaveBeenCalledWith('s1', expect.objectContaining({ until: monday(4) }))
+    expect(view.querySelector('[role="alert"]')).not.toBeNull()
   })
 })
 
