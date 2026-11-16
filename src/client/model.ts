@@ -203,15 +203,25 @@ export interface Section {
 const byRecency = (left: Row, right: Row): number =>
   (right.updatedAt - left.updatedAt) || (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)
 
+export interface StatusSectionOptions {
+  /**
+   * Show working sessions in their own Working section. When false (the
+   * default) they stay in Active, sorted with it.
+   */
+  readonly workingSection?: boolean
+}
+
 /**
  * Status sections in display order, each sorted by its own rule. Empty
  * sections are omitted: the sidebar shows only sections that hold a row.
  */
-export function statusSections(rows: readonly Row[], filter: ArchivedFilter): Section[] {
+export function statusSections(rows: readonly Row[], filter: ArchivedFilter, options: StatusSectionOptions = {}): Section[] {
+  const { workingSection = false } = options
   const buckets = new Map<SectionKey, Row[]>([...PLACEMENTS, 'archived' as const].map(key => [key, []]))
   for (const row of rows) {
     if (!visibleUnder(row, filter)) continue
-    const key: SectionKey | null = row.native.archived ? 'archived' : row.placement
+    let key: SectionKey | null = row.native.archived ? 'archived' : row.placement
+    if (key === 'working' && !workingSection) key = 'active'
     if (key !== null) buckets.get(key)!.push(row)
   }
   const sections: Section[] = []

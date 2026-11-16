@@ -63,6 +63,17 @@ describe('policyFromDraft', () => {
 })
 
 describe('SettingsPage', () => {
+  it('toggles the optional Working section, off by default', () => {
+    const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy } })
+    const view = render(runtime)
+    const toggle = view.querySelector<HTMLInputElement>('[data-testid="t3-display-settings"] [role="switch"]')!
+    expect(toggle.getAttribute('aria-label')).toBe('settings.workingSection')
+    expect(toggle.checked).toBe(false)
+    act(() => { toggle.click() })
+    expect(runtime.prefs.getSnapshot().workingSection).toBe(true)
+    expect(toggle.checked).toBe(true)
+  })
+
   it('saves a workspace override chosen on the page', async () => {
     const runtime = fakeRuntime({ sessions: [session('s1'), session('s2')], workspaces, backend: { policy } })
     const view = render(runtime)

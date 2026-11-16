@@ -982,6 +982,13 @@
   min-width: 0;
 }
 
+.t3sb-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+}
+
 .t3sb-settings-days {
   width: 88px;
 }

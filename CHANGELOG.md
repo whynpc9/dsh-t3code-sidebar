@@ -2,6 +2,12 @@
 
 `0.1.0-preview.0` is the first npm release (v0.1-preview, Linux Web), published under the `preview` dist-tag. Earlier versions were internal alphas (R0) and were never published. The verified runtime is `@deepseek-ai/dsh` `0.2.2-rc.1`; see [docs/release.md](docs/release.md) for the support matrix, release gates and known limitations.
 
+## Unreleased
+
+### Changed
+
+- **Optional Working section.** The Working section is now off by default: running sessions stay in Active. Turn it on under **Plugins → dsh-t3code-sidebar → Sidebar → Working section** to fold working sessions into their own section; they still return to Active when they need you. The choice is stored per browser.
+
 ## 0.1.0-preview.0 — 2026-11-16
 
 First public preview (v0.1-preview, Linux Web). Install with `dsh plugin --profile <profile> add dsh-t3code-sidebar@preview`.
