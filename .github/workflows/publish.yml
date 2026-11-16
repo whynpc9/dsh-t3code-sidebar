@@ -1,0 +1,75 @@
+name: Publish to npm
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  package:
+    if: github.repository == 'whynpc9/dsh-t3code-sidebar' && !github.event.deleted
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      dist-tag: ${{ steps.release.outputs.dist-tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+      - name: Validate release tag
+        id: release
+        shell: bash
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          version=$(node -p 'require("./package.json").version')
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Git tag $GITHUB_REF_NAME must match package version v$version" >&2
+            exit 1
+          fi
+          case "${version%%+*}" in
+            *-preview|*-preview.*) dist_tag=preview ;;
+            *-alpha|*-alpha.*) dist_tag=alpha ;;
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          echo "dist-tag=$dist_tag" >> "$GITHUB_OUTPUT"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run verify
+      - name: Pack verified release
+        shell: bash
+        run: |
+          tarball=$(npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP")
+          mv "$RUNNER_TEMP/$tarball" "$RUNNER_TEMP/package.tgz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package.tgz
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+      - name: Publish verified tarball
+        env:
+          DIST_TAG: ${{ needs.package.outputs.dist-tag }}
+        run: npm publish ./package.tgz --tag "$DIST_TAG" --ignore-scripts
