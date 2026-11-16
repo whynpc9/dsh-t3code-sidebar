@@ -1,6 +1,6 @@
 # DeepSeek Harness T3 Sidebar 开发计划
 
-> 历史资料：本文保留早期任务拆解、估算和执行状态，不再作为当前计划或支持范围维护。当前信息见[文档索引](../README.md)与[发行说明](../release.md)。
+> 历史资料：本文保留早期任务拆解、估算和执行状态，不再作为当前计划或支持范围维护。当前信息见[文档索引](../README.zh.md)与[发行说明](../release.zh.md)。
 
 版本：Draft 0.2 · 2026-11-09（修订 2026-11-08 初版；同日记录用户决策 Q1–Q5，见第 10 节）。任务分区为默认和首要交付；同一 v0.1 包含项目视图切换及可配置的时间窗口自动 Settled。本文是待执行计划，未完成项不能作为已验证能力宣传。
 
@@ -48,7 +48,7 @@
 | Q01 | 进行中 | 237 项单元/服务/组件/集成测试；Linux Web 端到端已有主场景、重启和新功能证据；A10 另有真实 Gateway 与浏览器用例 |
 | Q03 | 部分 | 真实 Cordis context 上 Client 20 次启停覆盖成功、不兼容、超时和迟到失败。macOS Desktop 已复验真实 Loader 卸载、重装、版本递增升级和回退，停放元数据保留。 |
 | Q02 | 部分 | Linux Web 已测量 100 工作区/5000 会话（首屏、视图切换、搜索、语义更新、DOM 行数、堆内存），单列表改为有界窗口；见[验证记录](../validation/poc/README.md#2026-11-12-linux-web-复验alpha2)。Desktop 上的预算与 20 次桌面启停待测 |
-| R01 | v0.1-preview 就绪 | [CHANGELOG](../../CHANGELOG.md)、[发行说明与支持矩阵](../release.md)（门禁核对）；npm 包名已确认可用，`0.1.0-preview.0` 以 `preview` 标签发布 |
+| R01 | v0.1-preview 就绪 | [CHANGELOG](../../CHANGELOG.md)、[发行说明与支持矩阵](../release.zh.md)（门禁核对）；npm 包名已确认可用，`0.1.0-preview.0` 以 `preview` 标签发布 |
 | M6 | 部分 | macOS Desktop 0.2.2-rc.1 已通过 #2/#3 的 ⌘Q 重启主线、标题与元数据对照、语义唤醒和到期补算。⌘K / ⌘O 回归已复现。 |
 
 issue #4（2026-11-11）的 A 连接代次、B 装配与失败路径、C 提交与恢复已有自动化证据。E 已修复 pnpm 11 的 frozen lockfile，统一包管理器并启用 CI。Linux Web 已复验真实 Loader 安装、重启与回退。D 已在 macOS Desktop 上复验扫描后新建并停放、十分钟内 ⌘Q 重启的场景。Desktop 其余通过范围和待验项见[验证记录](../validation/poc/README.md)。

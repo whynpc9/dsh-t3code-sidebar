@@ -34,6 +34,7 @@
     "cordis.patch.yml",
     "LICENSE",
     "README.md",
+    "README.zh.md",
     "CHANGELOG.md"
   ],
   "engines": {

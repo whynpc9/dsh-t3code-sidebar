@@ -1,21 +1,23 @@
-# 文档索引
+# Documentation index
 
-使用者只需阅读[项目 README](../README.md)和[发行说明](release.md)；其余目录保留设计依据与验证证据。
+English | [中文](README.zh.md)
 
-## 当前信息
+Most users only need the [project README](../README.md) and [release notes](release.md). The remaining directories preserve design rationale and validation evidence.
 
-- [项目 README](../README.md)：功能、安装、使用和开发入口。
-- [发行说明与支持矩阵](release.md)：已验证平台、升级回滚、发布门禁和已知限制。
-- [CHANGELOG](../CHANGELOG.md)：版本历史。
-- [设计文档](design/README.md)：产品行为、界面、实现契约和时间策略。
-- [验证记录](validation/README.md)：各轮实测环境、结果、截图和原始数据。
+## Current information
 
-## 参考与历史
+- [Project README](../README.md): features, installation, usage, and development entry points.
+- [Release notes and support matrix](release.md): verified platforms, upgrades and rollback, release gates, and known limitations.
+- [CHANGELOG](../CHANGELOG.md): version history.
+- [Design documentation](design/README.md): product behavior, UI, implementation contracts, and time policies (documents in Chinese).
+- [Validation records](validation/README.md): test environments, results, screenshots, and raw data (documents in Chinese).
 
-- [上游调研](research/README.md)：固定版本源码调研，记录设计时的上游事实，不代表当前实现状态。
-- [开发计划](archive/development-plan.md)：早期任务拆解与里程碑，已完成内容仅作历史记录；后续计划不在这里持续维护。
+## Reference and history
 
-## 插件页短详情
+- [Upstream research](research/README.md): fixed-version source research recording upstream facts at design time, not current implementation status (Chinese).
+- [Development plan](archive/development-plan.md): early task breakdown and milestones, kept only as history and no longer maintained (Chinese).
 
-- [中文](DETAIL.zh.md) / [English](DETAIL.md)：由 `locale/*.json` 的 `meta.detail` 指向，显示在 Plugins 详情页的配置控件之前。
-- 这两份文件刻意保持简短，不承担安装手册或完整功能说明；修改后运行 `pnpm run pack:check`，确认它们随包发布且内部 `docs/` 不会被打包。
+## Short plugin-page details
+
+- [中文](DETAIL.zh.md) / [English](DETAIL.md): selected by `meta.detail` in `locale/*.json` and displayed before the configuration controls on the Plugins detail page.
+- These files are intentionally brief rather than a full installation or feature guide. After editing them, run `pnpm run pack:check` to confirm that they are published without the internal `docs/` materials.

@@ -7,9 +7,9 @@ const listing = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], 
 const files = listing.files.map(file => file.path).sort()
 const detailDocs = ['docs/DETAIL.md', 'docs/DETAIL.zh.md']
 // npm includes a README beside the published detail documents automatically.
-const publicDocs = [...detailDocs, 'docs/README.md']
+const publicDocs = [...detailDocs, 'docs/README.md', 'docs/README.zh.md']
 const required = [
-  'package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'CHANGELOG.md',
+  'package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'README.zh.md', 'CHANGELOG.md',
   'locale/en.json', 'locale/zh.json', ...detailDocs,
 ]
 const missing = required.filter(file => !files.includes(file))

@@ -1,60 +1,62 @@
 # dsh-t3code-sidebar
 
-为 DeepSeek Harness 提供 T3 Code 风格的任务侧栏：保留原生 Workspaces 的构图与操作，把会话按任务状态整理，也可按工作区或单列表查看。
+English | [中文](README.zh.md)
 
-> 当前为 **v0.1-preview**。已在 Linux Web + `@deepseek-ai/dsh` `0.2.2-rc.1` 上验证；macOS Desktop 仅部分验证，Windows 尚未验证。详见[支持矩阵与已知限制](docs/release.md)。
+A T3 Code-style task sidebar for DeepSeek Harness. It preserves the native Workspaces layout and interactions while organizing sessions by task status, workspace, or one list.
 
-## 功能
+> This is **v0.1-preview**. It has been verified on Linux Web with `@deepseek-ai/dsh` `0.2.2-rc.1`; macOS Desktop is only partially verified, and Windows is unverified. See the [support matrix and known limitations](docs/release.md).
 
-- **三种分组**：按状态（默认）、按工作区、单列表；支持搜索和归档筛选。
-- **五种任务状态**：置顶、待处理、运行中、稍后处理、已处理；空分区自动隐藏。
-- **任务整理**：稍后处理、手动收起、结果确认，以及默认 7 天无活动自动收起。
-- **灵活策略**：自动收起可关闭或改为 1–90 天，支持工作区覆盖和单会话豁免。
-- **原生体验**：会话菜单、工作区管理、中英文、亮暗主题及窄栏跟随 Harness。
+## Features
 
-## 安装
+- **Three layouts**: by status (default), by workspace, or one list, with search and archive filters.
+- **Five task states**: Pinned, Active, Working, Snoozed, and Settled; empty sections stay hidden.
+- **Task organization**: Snooze, manual settling, result acknowledgement, and automatic settling after 7 days of inactivity by default.
+- **Flexible policies**: disable automatic settling or set a window of 1–90 days, with workspace overrides and per-session exemptions.
+- **Native experience**: session menus, workspace management, English and Chinese, light and dark themes, and the narrow Harness rail.
 
-建议先在测试 profile 中试用：
+## Installation
+
+Try the plugin in a test profile first:
 
 ```sh
 dsh plugin --profile <profile> add dsh-t3code-sidebar@preview
 dsh --profile <profile>
 ```
 
-卸载后原生侧栏自动恢复，会话与聊天记录不受影响：
+Removing the plugin restores the native sidebar without affecting sessions or chat history:
 
 ```sh
 dsh plugin --profile <profile> remove dsh-t3code-sidebar
 ```
 
-升级、回滚和本地 tarball 安装见[发行说明](docs/release.md)。
+See the [release notes](docs/release.md) for upgrades, rollback, and local tarball installation.
 
-## 使用
+## Usage
 
-- 在侧栏的**视图选项**中切换分组和归档筛选；macOS 可用 `⌘K` 搜索、`⌘O` 添加工作区。
-- 在会话的 **… 菜单**中稍后处理、收起、确认结果或设置自动收起豁免；归档仍使用原生菜单。
-- 在 **插件 → dsh-t3code-sidebar** 中调整自动收起与工作区策略，并预览效果、查看最近变更。侧栏的**视图选项 → 侧栏设置…**可直达。
+- Use **View options** in the sidebar to change grouping and archive filters. On macOS, press `⌘K` to search and `⌘O` to add a workspace.
+- Use a session's **… menu** to snooze, settle, acknowledge a result, or exempt it from automatic settling. Archiving remains a native menu action.
+- Open **Plugins → dsh-t3code-sidebar** to configure automatic settling and workspace policies, preview their effects, and review recent changes. **View options → Sidebar settings…** in the sidebar opens the same page.
 
-“稍后处理”和“已处理”只改变侧栏整理状态，不会停止任务、归档会话或删除内容。状态默认由 Host 持久化；Host 不可用时行为见[已知限制](docs/release.md#5-已知限制release-notes-必须列出)。
+Snoozing and settling only change how sessions are organized in the sidebar. They do not stop tasks, archive sessions, or delete content. The Host persists task state by default; see [known limitations](docs/release.md#5-known-limitations) for behavior when it is unavailable.
 
-## 开发
+## Development
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm run verify  # 类型检查、测试、构建、npm 包检查
+pnpm run verify  # Typecheck, test, build, and check the npm package
 pnpm pack
 ```
 
-- `src/domain/`：状态、排序、时间和命令纯函数
-- `src/contracts/`：共享 schema 与 Remote 契约
-- `src/host/`：持久化、事件处理与调度
-- `src/client/`：后端适配、视图模型和 React 界面
-- `tests/`：单元、组件、集成与端到端测试
+- `src/domain/`: pure functions for states, sorting, time, and commands
+- `src/contracts/`: shared schemas and Remote contracts
+- `src/host/`: persistence, event processing, and scheduling
+- `src/client/`: backend adapters, view models, and React UI
+- `tests/`: unit, component, integration, and end-to-end tests
 
-## 文档
+## Documentation
 
-- [文档索引](docs/README.md)：设计、调研和验证材料入口
-- [发行说明与支持矩阵](docs/release.md)
+- [Documentation index](docs/README.md): design, research, and validation materials
+- [Release notes and support matrix](docs/release.md)
 - [CHANGELOG](CHANGELOG.md)
 
 [MIT License](LICENSE)

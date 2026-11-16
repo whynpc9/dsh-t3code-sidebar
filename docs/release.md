@@ -1,60 +1,61 @@
-# 发行说明、支持矩阵与发布门禁（R01）
+# Release notes, support matrix, and release gates (R01)
 
-更新：2026-11-16，对应 `0.1.0-preview.0`（v0.1-preview，npm `preview` 标签）。本文是 [开发计划](archive/development-plan.md) 第 7、11 节发布分层的落地清单：哪些已有证据，哪些仍缺；未列为“通过”的项不得对外宣称。版本历史见 [CHANGELOG](../CHANGELOG.md)。
+English | [中文](release.zh.md)
 
-## 1. 支持矩阵
+Updated 2026-11-16 for `0.1.0-preview.0` (v0.1-preview, npm `preview` tag). This document applies the release tiers in sections 7 and 11 of the [development plan](archive/development-plan.md): what has evidence and what remains uncovered. Do not claim any item not marked as passed. See the [CHANGELOG](../CHANGELOG.md) for version history.
 
-`engines.dsh` 声明 `>=0.2.2-rc.1 <0.3.0`（维护者决定暂不收窄），但只有下表中的组合有实测证据。
+## 1. Support matrix
 
-| 运行时 | 平台 | 插件版本 | 状态 | 证据 |
+`engines.dsh` declares `>=0.2.2-rc.1 <0.3.0` (intentionally not narrowed further by the maintainer), but only the combinations below have test evidence.
+
+| Runtime | Platform | Plugin version | Status | Evidence |
 | --- | --- | --- | --- | --- |
-| `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web（WSL2，headless Chromium 1243） | 0.1.0-alpha.2 → 0.1.0-preview.0 | **已验证**：安装、主场景、Host 重启、审批态、快捷键、Workspace 策略与结果确认、规模与生命周期（[Q02/Q03](validation/q02-q03/README.md)）、权限撤回（[A10](validation/a10/README.md)） | [验证记录 · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
-| `@deepseek-ai/dsh` 0.2.2-rc.1 | macOS Desktop 26.6.2（arm64，Electron 44.7） | 0.1.0-alpha.0 / alpha.1 构建 | **部分验证**（#2/#3 ⌘Q 重启主线、卸载/重装/升级/回退、竞争插件）；alpha.2 的 ⌘K/⌘O 修复**未在 Desktop 复验** | [验证记录 · macOS Desktop](validation/poc/README.md#2026-11-11-macos-desktop-复验issue-4) |
-| 0.2.2-rc.1 以外的版本 | 任意 | — | 未验证 | — |
-| Windows Desktop / Windows Web | — | — | 未验证 | — |
+| `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web (WSL2, headless Chromium 1243) | 0.1.0-alpha.2 → 0.1.0-preview.0 | **Verified**: installation, main scenarios, Host restart, approvals, shortcuts, workspace policies and result acknowledgement, scale and lifecycle ([Q02/Q03](validation/q02-q03/README.md)), and access revocation ([A10](validation/a10/README.md)) | [Validation record · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
+| `@deepseek-ai/dsh` 0.2.2-rc.1 | macOS Desktop 26.6.2 (arm64, Electron 44.7) | 0.1.0-alpha.0 / alpha.1 builds | **Partially verified** (#2/#3 ⌘Q restart flow, uninstall/reinstall, upgrade/rollback, and rival plugins); the alpha.2 ⌘K/⌘O fix **has not been reverified on Desktop** | [Validation record · macOS Desktop](validation/poc/README.md#2026-11-11-macos-desktop-复验issue-4) |
+| Versions other than 0.2.2-rc.1 | Any | — | Unverified | — |
+| Windows Desktop / Windows Web | — | — | Unverified | — |
 
-## 2. 发布分层与当前位置
+## 2. Release tiers and current position
 
-| 层 | 出口条件 | 状态 |
+| Tier | Exit criteria | Status |
 | --- | --- | --- |
-| R0 内部 alpha | 测试 profile 可安装；任务视图、原生动作、手动 Snooze/Settled | 已达成 |
-| v0.1-preview（Linux Web） | Linux Web 上 F01–F11、A01–A12、T01–T09、T12 时间部分全部有证据 | **发布 `0.1.0-preview.0`**：各项均有证据，未覆盖部分见第 4、5 节 |
-| v0.1（Web + Desktop） | preview 基础上 macOS Desktop 安装、卸载与 GUI 验收 | 未达成：Desktop 复验（M6）未完成 |
+| R0 internal alpha | Installable in a test profile; task view, native actions, manual Snooze/Settled | Achieved |
+| v0.1-preview (Linux Web) | Evidence on Linux Web for F01–F11, A01–A12, T01–T09, and the time portions of T12 | **`0.1.0-preview.0` released**: evidence exists for every item; see sections 4 and 5 for uncovered cases |
+| v0.1 (Web + Desktop) | macOS Desktop installation, uninstallation, and GUI acceptance in addition to preview | Not achieved: Desktop reverification (M6) is incomplete |
 
-## 3. 安装、升级、回滚
+## 3. Installation, upgrades, and rollback
 
-见 [README · 安装](../README.md#安装)。要点：
+See [README · Installation](../README.md#installation). Key points:
 
-- 只在新建的测试 profile 中安装预构建 tarball（`pnpm pack` 产物）。
-- `plugin add` 对**相同版本号**的 tarball 是空操作；升级测试必须提升 `version`，或先 `remove` 再 `add`。
-- 回滚：`dsh plugin --profile <p> remove dsh-t3code-sidebar`，再 `add` 上一已验证 tarball。插件元数据（`t3_sidebar` 存储域）在卸载后保留；alpha.2 新增字段（`keepUnacknowledgedResults`、`workspaceOverrides`、`resultAcknowledgedSeq` 及 global 的宽限/成员记录）在旧版本读取时被 zod 默认丢弃，回退后旧版本按旧规则运行，不会损坏数据；重新升级后 Workspace 覆盖与结果确认需要重新设置。
-- 运维开关 `DSH_T3_SIDEBAR_HOST=off`：跳过 Host 服务，侧栏退回浏览器本地预览并在设置页说明原因。
+- Install prebuilt tarballs (`pnpm pack` output) only in newly created test profiles.
+- `plugin add` is a no-op for a tarball with the **same version number**. Increment `version` for upgrade tests, or `remove` before `add`.
+- To roll back, run `dsh plugin --profile <p> remove dsh-t3code-sidebar`, then `add` the previously verified tarball. Plugin metadata in the `t3_sidebar` storage domain survives uninstallation. When older versions read fields added in alpha.2 (`keepUnacknowledgedResults`, `workspaceOverrides`, `resultAcknowledgedSeq`, and global grace/membership records), zod defaults discard those fields. The rolled-back version follows its old rules without corrupting data, but workspace overrides and result acknowledgements must be configured again after upgrading.
+- Operational switch `DSH_T3_SIDEBAR_HOST=off`: skips the Host service, uses the browser-local preview, and explains why on the settings page.
 
-## 4. 发布门禁核对（v0.1-preview，Linux Web）
+## 4. Release gate review (v0.1-preview, Linux Web)
 
-| 门禁 | 状态 | 说明 |
+| Gate | Status | Notes |
 | --- | --- | --- |
-| F01–F11 功能 | 有证据 | 端到端 `scenario.mjs` 20/20、`features.mjs` 14/14；单元/组件 230 项 |
-| A02 等待审批 / A03 新审批唤醒 | **通过（Linux Web）** | 本机无 bubblewrap，bash 不升级沙箱；以测试专用 `approval-gate` 夹具经真实审批流程触发 |
-| A07 搜索竞态 / A08 键盘 | 自动化 | `tests/client/sidebar.spec.tsx`（真实 DOM）+ e2e N09 |
-| A10 权限撤回 / guest | **通过（Web，隔离 Gateway 夹具）** | guest 默认原生侧栏；撤权后关闭任务视图、拒绝读写和后续流帧；未知写入被拒；任务 API 关闭时 owner 仍可用本地预览。见 [验证记录](validation/a10/README.md) |
-| A12 规模 | **Linux Web 通过已测负载** | 100 个工作区 / 5000 条会话 / 50 个并发轮次。首屏、本地更新、搜索、切换、单列表长滚动行数均在预算内。见 [Q02 实测](validation/q02-q03/README.md)。 |
-| 读屏 / 当前项定位 | **U07 部分通过** | Desktop 的当前项定位、窄窗口和键盘焦点路径已复验。VoiceOver 按本轮范围跳过。见 [U07 验收记录](validation/u07/README.md) |
-| T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |
-| Q03 生命周期与重复启停 | **Linux Web 功能通过** | 安装、升级、回退、卸载、重装、同槽竞争、Host 服务缺失和 20 次真实 Loader 启停已验证。100 次复验中，停用后的任务 DOM 和 follow 流归零，浏览器堆仍有增长，主要来自 V8 编译。断网和跨长时间段场景按本轮范围跳过。见 [Q03 实测](validation/q02-q03/README.md#q03--安装冲突与启停)。 |
-| 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |
-| npm 包名可用性 | **已确认** | 2026-11-16 `npm view dsh-t3code-sidebar` 返回 404，名称未被占用 |
-| 发布流程 | 已配置 | 用 `pnpm run release:preview`（即 `pnpm publish --tag preview`）发布，预览版不占用 `latest`。pnpm 11 不读取 `publishConfig.tag`，直接 `pnpm publish` 会标为 `latest`，`prepublishOnly` 也拿不到标签，无法拦截。`publishConfig.tag` 只作为 `npm publish` 的兜底。`prepublishOnly` 运行 `pnpm run verify` |
-| 从 registry 安装 | **发布后待验证** | 发布后在新测试 profile 执行 `dsh plugin --profile <p> add dsh-t3code-sidebar@preview`，确认 Host 与 Client 两半均加载；用 `npm view dsh-t3code-sidebar dist-tags` 核对 `preview` 指向 `0.1.0-preview.0` |
+| F01–F11 features | Evidence available | End-to-end `scenario.mjs` 20/20 and `features.mjs` 14/14; 230 unit/component tests |
+| A02 pending approval / A03 wake on new approval | **Passed (Linux Web)** | bubblewrap is unavailable on this machine, so bash does not request sandbox escalation; the test-only `approval-gate` fixture triggers the real approval flow |
+| A07 search races / A08 keyboard | Automated | `tests/client/sidebar.spec.tsx` (real DOM) + e2e N09 |
+| A10 access revocation / guest | **Passed (Web, isolated Gateway fixture)** | Guests keep the native sidebar; revocation withdraws the task view and denies writes and later stream frames; unknown writes are rejected; owners retain the local preview when the task API is off. See the [validation record](validation/a10/README.md) |
+| A12 scale | **Passed the tested load on Linux Web** | 100 workspaces / 5,000 sessions / 50 concurrent turns. First render, local updates, search, layout switching, and bounded one-list rows during long scrolls are within budget. See [Q02 measurements](validation/q02-q03/README.md). |
+| Screen reader / locate current session | **U07 partially passed** | Current-session location, narrow windows, and keyboard focus paths were reverified on Desktop. VoiceOver was skipped for this round. See the [U07 record](validation/u07/README.md) |
+| T01–T09 | Unit/service tests | Real multi-day automatic settling remains covered only by fake clocks (minimum window: 1 day) |
+| Q03 lifecycle and repeated restarts | **Functional pass on Linux Web** | Installation, upgrade, rollback, uninstall, reinstall, slot rivalry, missing Host service, and 20 real Loader restarts verified. Across 100 runs, task DOM and follow streams reached zero after disable; browser heap still grew, primarily from V8 compilation. Real network loss and long-duration scenarios were skipped for this round. See [Q03 measurements](validation/q02-q03/README.md#q03--安装冲突与启停). |
+| Licensing | MIT LICENSE included | Dependencies are shared with the host; build output contains no third-party source copies (pack check) |
+| npm package name availability | **Confirmed** | `npm view dsh-t3code-sidebar` returned 404 on 2026-11-16; the name was unclaimed |
+| Release process | Configured | Use `pnpm run release:preview` (`pnpm publish --tag preview`) so previews do not take `latest`. pnpm 11 does not read `publishConfig.tag`; plain `pnpm publish` uses `latest`, and `prepublishOnly` cannot intercept it because the tag is unavailable there. `publishConfig.tag` remains a fallback for `npm publish`. `prepublishOnly` runs `pnpm run verify` |
+| Registry installation | **Pending post-publish verification** | After publishing, run `dsh plugin --profile <p> add dsh-t3code-sidebar@preview` in a new test profile and confirm that both Host and Client load; use `npm view dsh-t3code-sidebar dist-tags` to confirm that `preview` points to `0.1.0-preview.0` |
 
-## 5. 已知限制（release notes 必须列出）
+## 5. Known limitations
 
-- 只在 Linux Web + dsh 0.2.2-rc.1 上正式支持；macOS Desktop 为部分验证（M6 未完成），Windows 未验证。
-- 自动 Settled 的真实跨天迁移只由 fake clock 覆盖；读屏（VoiceOver）播报未验收。
-
-- 原生行装饰子槽、手动拖拽排序、工作区树分组不可用（见 [原生构图设计 §9](design/native-sidebar-design.md)）。
-- ⌘K / ⌘O 依赖原生 `sidebar.workspaces` 注册注入的请求 store（公开 `ctx.slots.entries`）；若宿主改变该注入形状，快捷键退回无效果而不报错。Linux Web 默认未绑定这两个命令（宿主默认值不含 `web:linux`）。
-- 自动 Settled 的保护以 Host 可见事实为准：turn 之外仍待回答的定时提问经精确投影读取；读取失败时跳过并显示“状态未知”。
-- 浏览器本地预览模式下没有自动 Settled，Snooze 只在浏览器打开时返回。
-- 审计（transitions）为尽力而为，主记录提交后审计写失败会留下缺口；诊断以记录 `receipts` 与 revision 为准。
-- 自动 Archived、PR/限额相关规则不在 v0.1（v0.2/v0.3）。
+- Only Linux Web + dsh 0.2.2-rc.1 is officially supported; macOS Desktop is partially verified (M6 incomplete), and Windows is unverified.
+- Real multi-day automatic Settled transitions are covered only by fake clocks; VoiceOver announcements have not been accepted.
+- Native row-decoration slots, manual drag ordering, and workspace-tree grouping are unavailable (see [Native sidebar design §9](design/native-sidebar-design.md)).
+- ⌘K / ⌘O depend on the request store injected by the native `sidebar.workspaces` registration (public `ctx.slots.entries`). If the host changes that injection shape, the shortcuts silently stop working. Linux Web does not bind these commands by default (the host defaults contain no `web:linux` binding).
+- Automatic-settling protections rely on facts visible to the Host. Timed questions still awaiting answers outside a turn are read through exact projections; read failures skip the session and report “state unknown.”
+- Browser-local preview mode has no automatic Settled, and Snooze returns only while the browser is open.
+- Transition auditing is best-effort: an audit write failure after the main record commits can leave gaps. Use record `receipts` and revisions for diagnostics.
+- Automatic Archived and PR/quota rules are not part of v0.1 (planned for v0.2/v0.3).
