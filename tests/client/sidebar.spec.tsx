@@ -126,7 +126,10 @@ describe('search (A07)', () => {
 })
 
 describe('keyboard navigation (A08)', () => {
-  const sessions = [session('s1'), session('s2'), session('s3')]
+  // Explicit, distinct recency (s1 newest): equal timestamps sort by id, but
+  // fixtures stamped across a millisecond tick would reorder the rows.
+  const base = Date.now() - 60_000
+  const sessions = [session('s1', { updatedAt: base }), session('s2', { updatedAt: base - 1000 }), session('s3', { updatedAt: base - 2000 })]
 
   it('locates the current session after a search excludes it without reopening the conversation', async () => {
     const runtime = fakeRuntime({ sessions: [session('s1', { retainedBy: { mainView: 1 } }), session('s2')] })
