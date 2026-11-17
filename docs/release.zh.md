@@ -12,7 +12,8 @@
 | --- | --- | --- | --- | --- |
 | `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web（WSL2，headless Chromium 1243） | 0.1.0-alpha.2 → 0.1.0-preview.0 | **已验证**：安装、主场景、Host 重启、审批态、快捷键、Workspace 策略与结果确认、规模与生命周期（[Q02/Q03](validation/q02-q03/README.md)）、权限撤回（[A10](validation/a10/README.md)） | [验证记录 · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
 | `@deepseek-ai/dsh` 0.2.2-rc.1 | macOS Desktop 26.6.2（arm64，Electron 44.7） | 0.1.0-alpha.0 / alpha.1 构建 | **部分验证**（#2/#3 ⌘Q 重启主线、卸载/重装/升级/回退、竞争插件）；alpha.2 的 ⌘K/⌘O 修复**未在 Desktop 复验** | [验证记录 · macOS Desktop](validation/poc/README.md#2026-11-11-macos-desktop-复验issue-4) |
-| 0.2.2-rc.1 以外的版本 | 任意 | — | 未验证 | — |
+| `@deepseek-ai/dsh` 0.2.2-rc.3 | macOS Desktop 27.0.1（arm64） | 0.1.0-preview.0 基线构建 | **部分验证**：基本加载、低峰停放、定时投递与取消；M6 仍未完成 | [2026-11-17 验证记录](validation/desktop-v010-2026-11-17.md) |
+| 其他版本 | 任意 | — | 未验证 | — |
 | Windows Desktop / Windows Web | — | — | 未验证 | — |
 
 ## 2. 发布分层与当前位置

@@ -12,7 +12,8 @@ Updated 2026-11-16 for `0.1.0-preview.0` (v0.1-preview, npm `preview` tag). This
 | --- | --- | --- | --- | --- |
 | `@deepseek-ai/dsh` 0.2.2-rc.1 | Linux Web (WSL2, headless Chromium 1243) | 0.1.0-alpha.2 → 0.1.0-preview.0 | **Verified**: installation, main scenarios, Host restart, approvals, shortcuts, workspace policies and result acknowledgement, scale and lifecycle ([Q02/Q03](validation/q02-q03/README.md)), and access revocation ([A10](validation/a10/README.md)) | [Validation record · 2026-11-12](validation/poc/README.md#2026-11-12-linux-web-复验alpha2) |
 | `@deepseek-ai/dsh` 0.2.2-rc.1 | macOS Desktop 26.6.2 (arm64, Electron 44.7) | 0.1.0-alpha.0 / alpha.1 builds | **Partially verified** (#2/#3 ⌘Q restart flow, uninstall/reinstall, upgrade/rollback, and rival plugins); the alpha.2 ⌘K/⌘O fix **has not been reverified on Desktop** | [Validation record · macOS Desktop](validation/poc/README.md#2026-11-11-macos-desktop-复验issue-4) |
-| Versions other than 0.2.2-rc.1 | Any | — | Unverified | — |
+| `@deepseek-ai/dsh` 0.2.2-rc.3 | macOS Desktop 27.0.1 (arm64) | 0.1.0-preview.0 baseline build | **Partially verified**: basic loading, off-peak snooze, scheduled delivery and cancellation; M6 remains incomplete | [Validation record](validation/desktop-v010-2026-11-17.md) |
+| Other versions | Any | — | Unverified | — |
 | Windows Desktop / Windows Web | — | — | Unverified | — |
 
 ## 2. Release tiers and current position

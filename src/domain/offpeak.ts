@@ -36,7 +36,7 @@ const WEEKDAYS = [1, 2, 3, 4, 5]
  */
 export const DEEPSEEK_SCHEDULE: OffPeakSchedule = {
   source: 'https://api-docs.deepseek.com/quick_start/pricing',
-  verifiedOn: '2026-11-16',
+  verifiedOn: '2026-11-17',
   peak: [
     { days: WEEKDAYS, startMin: 60, endMin: 240 },
     { days: WEEKDAYS, startMin: 360, endMin: 600 },
