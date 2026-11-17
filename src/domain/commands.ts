@@ -78,13 +78,16 @@ export function snooze(
 /**
  * Refusal unless the session is known to be fully idle: running, activity and
  * pending all known, nothing running (turn, subagent, job) and nothing
- * awaiting the user. Null when idle.
+ * awaiting the user. Null when idle. `ignoreSchedule`: a `schedule` activity
+ * entry does not count (the session's own resume task, which the caller is
+ * about to cancel; the activity families cannot tell tasks apart).
  */
-function idleRefusal(facts: TaskFacts, verb: string): Transition | null {
+function idleRefusal(facts: TaskFacts, verb: string, ignoreSchedule = false): Transition | null {
   if (!facts.running.known || !facts.activity.known || !facts.pending.known) {
     return fail('BASELINE_PENDING', 'session state is still synchronizing')
   }
-  if (facts.running.value || facts.activity.value.length > 0) return fail('SESSION_ACTIVE', 'the session still has running work')
+  const activity = ignoreSchedule ? facts.activity.value.filter(kind => kind !== 'schedule') : facts.activity.value
+  if (facts.running.value || activity.length > 0) return fail('SESSION_ACTIVE', 'the session still has running work')
   if (hasApproval(facts)) return fail('PENDING_APPROVAL', `resolve the approval before ${verb}`)
   if (facts.pending.value.length > 0) return fail('PENDING_INPUT', `answer the pending question before ${verb}`)
   return null
@@ -107,11 +110,16 @@ export function attachResume(record: TaskRecord, scheduleId: string): TaskRecord
   return { ...record, disposition: { ...record.disposition, resume: { scheduleId } } }
 }
 
-/** Manual settle: only for known-idle sessions with nothing awaiting the user. */
+/**
+ * Manual settle: only for known-idle sessions with nothing awaiting the user.
+ * A session waiting to resume at off-peak is idle even though its resume task
+ * shows as `schedule` activity; settling it cancels that task (see `commit`).
+ */
 export function settle(record: TaskRecord, facts: TaskFacts, native: NativeState, now: number): Transition {
   if (native.archived) return fail('ARCHIVED', 'archived sessions cannot be settled')
   if (native.pinned) return fail('PINNED', 'unpin the session before settling it')
-  const busy = idleRefusal(facts, 'settling')
+  const resuming = record.disposition.kind === 'snoozed' && record.disposition.resume !== undefined
+  const busy = idleRefusal(facts, 'settling', resuming)
   if (busy !== null) return busy
   return {
     ok: true,

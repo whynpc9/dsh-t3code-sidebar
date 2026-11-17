@@ -240,6 +240,22 @@ describe('T3SidebarService', () => {
       expect(host.schedule!.deletes).toEqual(['schedule-1'])
     })
 
+    it('settles a session waiting to resume despite its own schedule activity, and deletes the task', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      host.activity.set('s1', ['schedule'])
+      expect(await service.command(command({ action: { kind: 'settle' }, expectedRevision: 1 })))
+        .toMatchObject({ ok: true, task: { record: { disposition: { kind: 'settled', reason: 'manual' } } } })
+      await settleDeletes()
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+    })
+
+    it('still refuses to settle a session with schedule activity and no resume of its own', async () => {
+      const { service, host } = await boot()
+      host.activity.set('s1', ['schedule'])
+      expect(await service.command(command({ action: { kind: 'settle' } }))).toMatchObject({ ok: false, code: 'SESSION_ACTIVE' })
+    })
+
     it('leaves the schedule alone when the snooze expires (it fires at the same instant)', async () => {
       const { service, host } = await boot()
       await service.command(resume())
