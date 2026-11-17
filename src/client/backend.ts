@@ -104,7 +104,7 @@ export interface TaskBackend {
   dispose(): void
 }
 
-const NO_CAPABILITIES: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
+const NO_CAPABILITIES: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false, hostSchedule: false }
 const DEFAULT_POLICY: TimePolicy = {
   revision: 0, autoSettleAfterDays: DEFAULT_AUTO_SETTLE_DAYS, keepUnacknowledgedFailures: false,
   keepUnacknowledgedResults: false, workspaceOverrides: {},
@@ -820,6 +820,10 @@ export class LocalBackend implements TaskBackend {
   async command(sessionId: string, action: CommandAction, context: CommandContext): Promise<CommandOutcome> {
     const now = Date.now()
     const view = (record: TaskRecord): TaskView => ({ sessionId, record, activity: null, autoSettleDeadline: null, autoSettleSkip: 'policy-off' })
+    // No scheduler in a browser: a scheduled message needs the Host.
+    if (action.kind === 'snooze' && action.resume !== undefined) {
+      return { ok: false, code: 'SCHEDULE_UNAVAILABLE', message: 'resuming needs the Host schedule service', task: null }
+    }
     let outcome: Transition | undefined
     let base: TaskRecord | undefined
     // Applied to the record as stored now (inside the cross-tab lock), never to a cached copy.
@@ -832,7 +836,7 @@ export class LocalBackend implements TaskBackend {
         summary: current.activity,
       }
       switch (action.kind) {
-        case 'snooze': outcome = snooze(current, facts, context.native, action.until, now); break
+        case 'snooze': outcome = snooze(current, facts, context.native, action.until, now, action.origin); break
         case 'settle': outcome = settle(current, facts, context.native, now); break
         case 'reopen': outcome = reopen(current, now); break
         case 'policy-override': outcome = setPolicyOverride(current, action.override, now); break

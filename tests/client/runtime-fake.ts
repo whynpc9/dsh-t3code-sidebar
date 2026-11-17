@@ -70,6 +70,7 @@ export function fakeRuntime(options: {
     settingsAction: () => undefined,
     notify: vi.fn(),
     snoozeRequest: createStore<string | null>(null),
+    resumeRequest: createStore<string | null>(null),
     notice: createStore<{ text: string; seq: number } | null>(null),
     slotStatus: slotStore,
     shortcutRequests: requestStore,

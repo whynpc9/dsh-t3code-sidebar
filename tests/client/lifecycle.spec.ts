@@ -489,6 +489,82 @@ describe('connectHostBackend failure paths', () => {
 describe('slot registry and session menu on a real Cordis context', () => {
   const runtimeOf = (env: Env): Runtime => [...env.slots][0]!.inject().runtime
 
+  it('leads the Snooze submenu with off-peak targets during DeepSeek peak hours, and surfaces a refusal', async () => {
+    // Host clock: Monday 2026-11-16 02:00 UTC, inside the 01:00–04:00 peak block.
+    const hostNow = Date.UTC(2026, 10, 16, 2)
+    const env = createEnv(() => hostApi(async () => ({ ok: true, value: { ...snapshot('e1', 0), serverNow: hostNow } })))
+    ;(env.sessions as unknown as { set(value: unknown): void }).set({
+      ids: ['s1'], byId: { s1: { id: 's1', displayTitle: 'one', title: 'one', running: false, blank: false, updatedAt: Date.now() } }, phase: 'ready',
+    })
+    ;(env.workspaces as unknown as { set(value: unknown): void }).set({ items: [], pinnedSessionIds: [], archivedSessionIds: [], phase: 'ready' })
+    const fiber = env.root.plugin(plugin)
+    await fiber
+    await settle()
+    type Item = { id: string; separatorBefore?: boolean; run?: () => void; children?: Item[] }
+    const menu = [...env.menus][0] as { resolve(target: { sessionId: string }): Item[] }
+    const children = () => menu.resolve({ sessionId: 's1' }).find(entry => entry.id === 'snooze')!.children!
+    expect(children().map(entry => entry.id).slice(0, 3)).toEqual(['snooze.off-peak', 'snooze.off-peak-long', 'snooze.1h'])
+    expect(children().map(entry => entry.separatorBefore ?? false)).toEqual(children().map(entry => entry.id === 'snooze.1h' || entry.id === 'snooze.custom'))
+    children()[0]!.run!()
+    await settle()
+    expect(env.apis[0]!.commands[0]!.input['action']).toEqual({ kind: 'snooze', until: Date.UTC(2026, 10, 16, 4), origin: 'off-peak' })
+    // Peak ended before the click reached the Host: the refusal shows as the usual notice.
+    const runtime = runtimeOf(env)
+    env.apis[0]!.commands[0]!.reply.resolve({ ok: true, value: { ok: false, code: 'INVALID_TIME', message: 'not an off-peak boundary', task: null } })
+    await settle()
+    expect(runtime.notice.getSnapshot()?.text).toBe('error.generic') // this locale stub echoes keys, so errorText falls back
+    // With the preference off, the submenu keeps only the ordinary presets.
+    runtime.prefs.set({ ...runtime.prefs.getSnapshot(), offPeakSnooze: false })
+    expect(children()[0]!.id).toBe('snooze.1h')
+    expect(children()[0]!.separatorBefore ?? false).toBe(false)
+    await fiber.dispose()
+  })
+
+  it('offers "Resume at off-peak…" for idle sessions on a Host with the scheduler, and names the resume on the wake item', async () => {
+    const hostNow = Date.UTC(2026, 10, 16, 2)
+    const until = Date.UTC(2026, 10, 16, 4)
+    const plain = taskView('s2', 1)
+    const resumed = {
+      ...plain,
+      record: {
+        ...plain.record,
+        disposition: {
+          kind: 'snoozed' as const, until, setAt: hostNow, baselinePending: [], baselineTurnEndSeq: null, baselineUserInputAt: null,
+          origin: 'off-peak' as const, resume: { scheduleId: 'schedule-1' },
+        },
+      },
+    }
+    const base = snapshot('e1', 0, [resumed])
+    const env = createEnv(() => hostApi(async () => ({
+      ok: true, value: { ...base, serverNow: hostNow, capabilities: { ...base.capabilities, hostSchedule: true } },
+    })))
+    ;(env.sessions as unknown as { set(value: unknown): void }).set({
+      ids: ['s1', 's2'],
+      byId: {
+        s1: { id: 's1', displayTitle: 'one', title: 'one', running: false, blank: false, updatedAt: Date.now() },
+        s2: { id: 's2', displayTitle: 'two', title: 'two', running: false, blank: false, updatedAt: Date.now() },
+      },
+      phase: 'ready',
+    })
+    ;(env.workspaces as unknown as { set(value: unknown): void }).set({ items: [], pinnedSessionIds: [], archivedSessionIds: [], phase: 'ready' })
+    const fiber = env.root.plugin(plugin)
+    await fiber
+    await settle()
+    type Item = { id: string; label?: string; run?: () => void; children?: Item[] }
+    const menu = [...env.menus][0] as { resolve(target: { sessionId: string }): Item[] }
+    const children = () => menu.resolve({ sessionId: 's1' }).find(entry => entry.id === 'snooze')!.children!
+    expect(children().map(entry => entry.id).slice(0, 4)).toEqual(['snooze.off-peak', 'snooze.off-peak-long', 'snooze.off-peak-resume', 'snooze.1h'])
+    const runtime = runtimeOf(env)
+    children().find(entry => entry.id === 'snooze.off-peak-resume')!.run!()
+    expect(runtime.resumeRequest.getSnapshot()).toBe('s1')
+    expect(env.apis[0]!.commands).toHaveLength(0)
+    expect(menu.resolve({ sessionId: 's2' }).find(entry => entry.id === 'reopen')!.label).toBe('menu.wakeCancelResume')
+    // Busy sessions are not offered it (the Host would refuse them).
+    env.status.set(new Map([['s1', { running: true }]]))
+    expect(children().some(entry => entry.id === 'snooze.off-peak-resume')).toBe(false)
+    await fiber.dispose()
+  })
+
   it('bridges the native ⌘K / ⌘O requests, reports a rival winner, and releases its subscriptions', async () => {
     const env = createEnv(() => hostApi())
     const shortcuts = counted({ searchRequest: 0, addRequested: false, directoryBusy: false, renameTarget: null })

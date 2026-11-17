@@ -84,7 +84,7 @@ export function taskView(sessionId: string, revision: number, kind: 'normal' | '
 export function snapshot(epoch: string, streamSeq: number, tasks: TaskView[] = [], policy: TimePolicy = POLICY): Snapshot {
   return {
     protocolVersion: 1, installationId: 'install', epoch, streamSeq, dataRevision: 0, serverNow: Date.now(),
-    capabilities: { hostActivity: true, sessionEvents: true, hostPending: false }, policy, tasks,
+    capabilities: { hostActivity: true, sessionEvents: true, hostPending: false, hostSchedule: false }, policy, tasks,
   }
 }
 

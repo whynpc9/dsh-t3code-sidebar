@@ -18,11 +18,12 @@ import {
   ConnectAbortedError, connectHostBackend, forbiddenBackendState, HostConnectError, initialBackendState, LocalBackend,
   type BackendState, type CommandOutcome, type HostFailure, type RecoveryNotice, type TaskBackend,
 } from './backend.ts'
+import { clockLabel } from './components/Rows.tsx'
 import { SettingsPage } from './components/SettingsPage.tsx'
 import { TaskSidebar } from './components/Sidebar.tsx'
 import { en, NS, zh, type Key } from './locales.ts'
 import {
-  autoSettleApplies, buildRows, heldResultOf, hostActivityKnown, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot,
+  autoSettleApplies, buildRows, heldResultOf, hostActivityKnown, offPeakResumeOffered, offPeakSnoozeItems, pendingOf, type SessionsSnapshot, type StatusSnapshot, type WorkspacesSnapshot,
 } from './model.ts'
 import { DEFAULT_PREFS, migratePrefs, type MenuTarget, type Prefs, type Runtime } from './runtime.ts'
 import { NO_REQUESTS, watchSlot, type ShortcutRequests, type SlotEntryLike, type SlotsLike, type SlotStatus } from './native-bridge.ts'
@@ -136,6 +137,7 @@ export function apply(rawCtx: Context): void {
   const prefs = persistentPrefs()
   const backendState = createStore<BackendState>(initialBackendState)
   const snoozeRequest = createStore<string | null>(null)
+  const resumeRequest = createStore<string | null>(null)
   const notice = createStore<{ text: string; seq: number } | null>(null)
   let noticeSeq = 0
   let noticeTimer: ReturnType<typeof setTimeout> | undefined
@@ -244,6 +246,7 @@ export function apply(rawCtx: Context): void {
     },
     notify,
     snoozeRequest,
+    resumeRequest,
     notice,
     slotStatus: slotStatus.readable,
     shortcutRequests: shortcutRequests.readable,
@@ -293,6 +296,7 @@ export function apply(rawCtx: Context): void {
       backend = null
       backendState.set(forbiddenBackendState)
       snoozeRequest.set(null)
+      resumeRequest.set(null)
       clearTimeout(noticeTimer)
       notice.set(null)
       if (ctx.contextMenus.active?.getSnapshot()?.kind === 'session') ctx.contextMenus.close?.()
@@ -430,24 +434,43 @@ export function apply(rawCtx: Context): void {
       const items: Record<string, unknown>[] = []
       if (row.placement === 'snoozed' || row.placement === 'settled'
         || (row.native.pinned && row.record !== undefined && row.record.disposition.kind !== 'normal')) {
+        const disposition = row.record?.disposition
         items.push({
           id: 'reopen',
-          label: row.record?.disposition.kind === 'snoozed' ? t('menu.wake') : t('menu.reopen'),
+          label: disposition?.kind !== 'snoozed' ? t('menu.reopen')
+            : disposition.resume !== undefined ? t('menu.wakeCancelResume') : t('menu.wake'),
           separatorBefore: true,
           disabled,
           run: run({ kind: 'reopen' }),
         })
       }
       if (!row.native.pinned && row.placement !== 'snoozed') {
+        // During DeepSeek peak pricing, "Until off-peak" leads the submenu.
+        const offPeak = offPeakSnoozeItems(row, now, prefs.getSnapshot().offPeakSnooze)
+        // …followed by "Resume at off-peak…" when the Host can schedule the message.
+        const resume = offPeakResumeOffered(row, state, now, prefs.getSnapshot().offPeakSnooze)
         items.push({
           id: 'snooze',
           label: t('menu.snooze'),
           separatorBefore: items.length === 0,
           disabled,
           children: [
-            ...snoozePresets(now).map(preset => ({
+            ...offPeak.map(item => ({
+              id: item.id,
+              label: t(item.label, { time: clockLabel(item.until, now) }),
+              disabled,
+              run: run(item.action),
+            })),
+            ...(resume
+              ? [{
+                  id: 'snooze.off-peak-resume', label: t('menu.resumeOffPeak'), disabled,
+                  run: () => { if (backendState.getSnapshot().status === 'ready') resumeRequest.set(sessionId) },
+                }]
+              : []),
+            ...snoozePresets(now).map((preset, index) => ({
               id: `snooze.${preset.id}`,
               label: t(`preset.${preset.id}` as Key),
+              separatorBefore: index === 0 && offPeak.length > 0,
               disabled,
               run: run({ kind: 'snooze', until: preset.until }),
             })),

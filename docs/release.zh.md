@@ -44,9 +44,10 @@
 | 读屏 / 当前项定位 | **U07 部分通过** | Desktop 的当前项定位、窄窗口和键盘焦点路径已复验。VoiceOver 按本轮范围跳过。见 [U07 验收记录](validation/u07/README.md) |
 | T01–T09 | 单元/服务测试 | 自动 Settled 的真实跨天迁移仍只由 fake clock 覆盖（最小窗口 1 天） |
 | Q03 生命周期与重复启停 | **Linux Web 功能通过** | 安装、升级、回退、卸载、重装、同槽竞争、Host 服务缺失和 20 次真实 Loader 启停已验证。100 次复验中，停用后的任务 DOM 和 follow 流归零，浏览器堆仍有增长，主要来自 V8 编译。断网和跨长时间段场景按本轮范围跳过。见 [Q03 实测](validation/q02-q03/README.md#q03--安装冲突与启停)。 |
-| 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查） |
+| 许可 | MIT LICENSE 随包发行 | 依赖均为宿主共享，构建产物不含第三方代码副本（pack 检查）。随包的中国法定节假日日期来自 [holiday-cn](https://github.com/NateScarlet/holiday-cn)（MIT，© 2019 NateScarlet） |
 | npm 包名可用性 | **已确认** | 2026-11-16 `npm view dsh-t3code-sidebar` 返回 404，名称未被占用 |
 | 发布流程 | 已配置 | 用 `pnpm run release:preview`（即 `pnpm publish --tag preview`）发布，预览版不占用 `latest`。pnpm 11 不读取 `publishConfig.tag`，直接 `pnpm publish` 会标为 `latest`，`prepublishOnly` 也拿不到标签，无法拦截。`publishConfig.tag` 只作为 `npm publish` 的兜底。`prepublishOnly` 运行 `pnpm run verify` |
+| 低峰时段数据 | 维护项 | 发布前对照 [DeepSeek 价格页面](https://api-docs.deepseek.com/quick_start/pricing) 复核 `src/domain/offpeak.ts` 中的 `DEEPSEEK_SCHEDULE` 并更新 `verifiedOn`；新一年的中国节假日安排公布后运行 `pnpm run holidays:update <年份>` |
 | 从 registry 安装 | **发布后待验证** | 发布后在新测试 profile 执行 `dsh plugin --profile <p> add dsh-t3code-sidebar@preview`，确认 Host 与 Client 两半均加载；用 `npm view dsh-t3code-sidebar dist-tags` 核对 `preview` 指向 `0.1.0-preview.0` |
 
 ## 5. 已知限制（release notes 必须列出）
@@ -60,3 +61,4 @@
 - 浏览器本地预览模式下没有自动 Settled，Snooze 只在浏览器打开时返回。
 - 审计（transitions）为尽力而为，主记录提交后审计写失败会留下缺口；诊断以记录 `receipts` 与 revision 为准。
 - 自动 Archived、PR/限额相关规则不在 v0.1（v0.2/v0.3）。
+- “低峰时段继续”依赖 Harness 定时任务服务，只在 Host 运行时投递。Host 停机期间错过时间的消息会在 Host 重新启动后立即投递，可能落在之后的高峰时段；插件不会重新安排或改期。提前返回时删除定时任务为尽力而为；创建和删除时 Harness 会在会话上下文中加入一条不触发运行的“定时任务变更”通知。

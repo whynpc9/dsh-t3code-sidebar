@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { durablePendingOf, nearestSnoozeDeadline, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
+import { commandDigest, durablePendingOf, nearestSnoozeDeadline, RESUME_TITLE, sweepDelay, T3SidebarService, unknownRetryDelay } from '../../src/host/service.ts'
 import { emptyRecord, type TaskRecord } from '../../src/domain/types.ts'
 import type { CommandInput, FollowEvent } from '../../src/contracts/schema.ts'
 import { appendStored, createFakeHost, MemoryDomainFacility, type FakeHost, type StoredLog } from './fake-host.ts'
@@ -10,9 +10,9 @@ let hosts: FakeHost[] = []
 
 async function boot(
   storage?: MemoryDomainFacility, revisions: Record<string, string> = {}, createdAt = Date.now() - 1000,
-  setup?: (host: FakeHost) => void,
+  setup?: (host: FakeHost) => void, hostOptions: { schedule?: boolean } = {},
 ) {
-  const host = createFakeHost(storage)
+  const host = createFakeHost(storage, hostOptions)
   host.headers.push(
     { id: 's1', createdAt, revision: revisions.s1 },
     { id: 's2', createdAt, revision: revisions.s2 },
@@ -76,6 +76,206 @@ describe('T3SidebarService', () => {
     expect(await service.command(input)).toMatchObject({ ok: true, replayed: true })
     expect((await iterator.next()).value).toMatchObject({ kind: 'delta', tasks: [{ sessionId: 's1', record: { revision: 1 } }] })
     controller.abort()
+  })
+
+  it('accepts an off-peak snooze only at a boundary the Host computes itself', async () => {
+    const { service } = await boot()
+    const now = Date.UTC(2027, 2, 1, 2) // Monday 02:00 UTC, inside the 01:00–04:00 peak
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      const off = Date.UTC(2027, 2, 1, 4)
+      expect(await service.command(command({ action: { kind: 'snooze', until: off + 60_000, origin: 'off-peak' } })))
+        .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+      expect(await service.command(command({ sessionId: 's2', action: { kind: 'snooze', until: off + 60_000 } })))
+        .toMatchObject({ ok: true, task: { record: { disposition: { kind: 'snoozed', until: off + 60_000 } } } })
+      expect('origin' in service.getSnapshot(1).tasks.find(task => task.sessionId === 's2')!.record.disposition).toBe(false)
+      expect(await service.command(command({ action: { kind: 'snooze', until: off, origin: 'off-peak' } })))
+        .toMatchObject({ ok: true, task: { record: { disposition: { kind: 'snoozed', until: off, origin: 'off-peak' } } } })
+      clock.mockReturnValue(Date.UTC(2027, 2, 1, 5)) // off-peak: nothing to target
+      expect(await service.command(command({ sessionId: 's2', expectedRevision: 1, action: { kind: 'snooze', until: Date.UTC(2027, 2, 1, 6), origin: 'off-peak' } })))
+        .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  describe('resume at off-peak', () => {
+    const PEAK = Date.UTC(2027, 2, 1, 2) // Monday 02:00 UTC, inside the 01:00–04:00 peak
+    const OFF = Date.UTC(2027, 2, 1, 4)
+    const PROMPT = 'Continue with the refactor.'
+    const resume = (patch: Partial<CommandInput> = {}) =>
+      command({ action: { kind: 'snooze', until: OFF, origin: 'off-peak', resume: { prompt: `  ${PROMPT}  ` } }, ...patch })
+    const settleDeletes = () => new Promise(resolve => setTimeout(resolve, 30))
+    const emit = (host: FakeHost, type: string, seq: number, data: unknown) =>
+      (host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's1' }, { type, seq, time: Date.now(), data })
+    let clock: ReturnType<typeof vi.spyOn>
+    beforeEach(() => { clock = vi.spyOn(Date, 'now').mockReturnValue(PEAK) })
+    afterEach(() => { clock.mockRestore() })
+
+    it('creates a one-shot schedule into the session at the boundary and stores only its id', async () => {
+      const { service, host } = await boot()
+      expect(service.getSnapshot(1).capabilities.hostSchedule).toBe(true)
+      const input = resume()
+      const result = await service.command(input)
+      expect(result).toMatchObject({ ok: true, task: { record: { disposition: { kind: 'snoozed', until: OFF, origin: 'off-peak', resume: { scheduleId: 'schedule-1' } } } } })
+      expect(host.schedule!.created).toEqual([{
+        id: 'schedule-1', title: RESUME_TITLE, prompt: PROMPT,
+        timing: { kind: 'at', at: '2027-03-01T04:00:00.000Z' }, target: { kind: 'session', sessionId: 's1' },
+      }])
+      // No message text in the stored record, its receipt or the audit trail.
+      const stored = JSON.stringify(host.storage.data.get('t3_sidebar'), (_key, value: unknown) => value instanceof Map ? [...value] : value)
+      expect(stored).not.toContain('refactor')
+      expect(stored).toContain(JSON.stringify(await commandDigest({ kind: 'snooze', until: OFF, origin: 'off-peak', resume: { prompt: PROMPT } })).slice(1, -1))
+      expect(await commandDigest({ kind: 'snooze', until: OFF, origin: 'off-peak', resume: { prompt: PROMPT } }))
+        .toMatch(/^\{"kind":"snooze","until":\d+,"origin":"off-peak","resume":\{"promptSha256":"[0-9a-f]{64}"\}\}$/)
+      // A retried command id replays without a second schedule; another message under the same id conflicts.
+      expect(await service.command(input)).toMatchObject({ ok: true, replayed: true })
+      expect(await service.command({ ...input, action: { kind: 'snooze', until: OFF, origin: 'off-peak', resume: { prompt: 'other' } } }))
+        .toMatchObject({ ok: false, code: 'CONFLICT' })
+      expect(host.schedule!.created).toHaveLength(1)
+    })
+
+    it('refuses sessions that are not known to be idle, and off-peak or non-boundary times, without scheduling', async () => {
+      const { service, host } = await boot()
+      host.activity.set('s1', ['job'])
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'SESSION_ACTIVE' })
+      host.activity.set('s1', [])
+      expect(await service.command(resume({ observedPending: [{ source: 'approval', key: 'a', kind: 'approval' }] })))
+        .toMatchObject({ ok: false, code: 'PENDING_APPROVAL' })
+      host.questions.set('s1', [{ callId: 'q', state: 'open' }])
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'PENDING_INPUT' })
+      host.questions.delete('s1')
+      host.projectionsFail = true
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'BASELINE_PENDING' })
+      host.projectionsFail = false
+      expect(await service.command(resume({ action: { kind: 'snooze', until: OFF + 60_000, origin: 'off-peak', resume: { prompt: 'go' } } })))
+        .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+      expect(await service.command(resume({ action: { kind: 'snooze', until: OFF, resume: { prompt: 'go' } } as never })))
+        .toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
+      clock.mockReturnValue(OFF + 1000)
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'INVALID_TIME' })
+      expect(host.schedule!.created).toHaveLength(0)
+      expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')).toBeUndefined()
+    })
+
+    it('refuses callers other than the Host owner', async () => {
+      const { service, host } = await boot()
+      // The Gateway derives the receiver's Context from the call; here its invocation names a shared viewer.
+      const ctx = (service as unknown as { ctx: object }).ctx
+      Object.defineProperty(ctx, 'invocation', { value: { peer: { principal: { kind: 'share-viewer' } } }, configurable: true })
+      const call = (input: CommandInput) => service.command(input)
+      expect(await call(resume())).toMatchObject({ ok: false, code: 'FORBIDDEN' })
+      expect(host.schedule!.created).toHaveLength(0)
+      // An ordinary snooze stays governed by the Gateway's task grant.
+      expect(await call(command({ action: { kind: 'snooze', until: OFF, origin: 'off-peak' } }))).toMatchObject({ ok: true })
+      delete (ctx as { invocation?: unknown }).invocation
+      expect(await call(resume({ sessionId: 's2' }))).toMatchObject({ ok: true })
+    })
+
+    it('without a schedule service: capability off and the command refused', async () => {
+      const { service } = await boot(undefined, {}, undefined, undefined, { schedule: false })
+      expect(service.getSnapshot(1).capabilities.hostSchedule).toBe(false)
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'SCHEDULE_UNAVAILABLE' })
+      expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')).toBeUndefined()
+    })
+
+    it('commits nothing when scheduling fails, and deletes the schedule when the commit fails', async () => {
+      const storage = new MemoryDomainFacility()
+      const { service, host } = await boot(storage)
+      host.schedule!.failCreate = true
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'SCHEDULE_UNAVAILABLE' })
+      expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')).toBeUndefined()
+      host.schedule!.failCreate = false
+      storage.failTableWrites = true
+      expect(await service.command(resume())).toMatchObject({ ok: false, code: 'STORAGE_UNAVAILABLE' })
+      await settleDeletes()
+      expect(host.schedule!.created.map(task => task.id)).toEqual(['schedule-1'])
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+      expect(host.schedule!.tasks.size).toBe(0)
+    })
+
+    it('deletes the schedule when the user returns early, and retries a failed delete', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      host.schedule!.failDeletes = 1
+      expect(await service.command(command({ action: { kind: 'reopen' }, expectedRevision: 1 })))
+        .toMatchObject({ ok: true, task: { record: { disposition: { kind: 'normal' } } } })
+      await settleDeletes()
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+      await new Promise(resolve => setTimeout(resolve, 2_100))
+      expect(host.schedule!.deletes).toEqual(['schedule-1', 'schedule-1'])
+      expect(host.schedule!.tasks.size).toBe(0)
+    }, 10_000)
+
+    it('deletes the schedule on a wake by human input, a new failure or a new pending request', async () => {
+      const wakes: [string, (host: FakeHost) => void][] = [
+        ['user-input', host => { emit(host, 'user/message', 10, { role: 'user', source: { kind: 'user' } }) }],
+        ['new-failure', host => { emit(host, 'turn/end', 10, { reason: { kind: 'error' } }) }],
+        ['new-pending', host => { host.questions.set('s1', [{ callId: 'q', state: 'open' }]); emit(host, 'turn/start', 10, {}) }],
+      ]
+      for (const [reason, wake] of wakes) {
+        const { service, host } = await boot()
+        await service.command(resume())
+        if (reason === 'new-pending') {
+          // The durable read that sees the question (as a later command or sweep would).
+          host.questions.set('s1', [{ callId: 'q', state: 'open' }])
+          await service.command(command({ action: { kind: 'policy-override', override: 'disabled' }, expectedRevision: 1 }))
+        }
+        wake(host)
+        await settleDeletes()
+        expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!.record.disposition.kind, reason).toBe('normal')
+        expect(host.schedule!.deletes, reason).toEqual(['schedule-1'])
+      }
+    })
+
+    it('deletes the schedule on human input to a pinned session, keeping its frozen Snooze', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      host.registry.pinnedSessionIds.push('s1')
+      emit(host, 'user/message', 10, { role: 'user', source: { kind: 'user' } })
+      await settleDeletes()
+      const disposition = service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!.record.disposition
+      expect(disposition).toMatchObject({ kind: 'snoozed', until: OFF, origin: 'off-peak' })
+      expect(disposition).not.toHaveProperty('resume')
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+    })
+
+    it('settles a session waiting to resume despite its own schedule activity, and deletes the task', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      host.activity.set('s1', ['schedule'])
+      expect(await service.command(command({ action: { kind: 'settle' }, expectedRevision: 1 })))
+        .toMatchObject({ ok: true, task: { record: { disposition: { kind: 'settled', reason: 'manual' } } } })
+      await settleDeletes()
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+    })
+
+    it('still refuses to settle a session with schedule activity and no resume of its own', async () => {
+      const { service, host } = await boot()
+      host.activity.set('s1', ['schedule'])
+      expect(await service.command(command({ action: { kind: 'settle' } }))).toMatchObject({ ok: false, code: 'SESSION_ACTIVE' })
+    })
+
+    it('leaves the schedule alone when the snooze expires (it fires at the same instant)', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      clock.mockReturnValue(OFF + 10)
+      // Any commit re-arms the deadline timer; the past deadline sweeps at once.
+      await service.command(command({ sessionId: 's2', action: { kind: 'settle' } }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(service.getSnapshot(1).tasks.find(task => task.sessionId === 's1')!.record.disposition.kind).toBe('normal')
+      expect(service.listTransitions(10).find(entry => entry.sessionId === 's1')).toMatchObject({ reason: 'snooze-expired' })
+      await settleDeletes()
+      expect(host.schedule!.deletes).toEqual([])
+    })
+
+    it('deletes the old schedule when the session is snoozed again', async () => {
+      const { service, host } = await boot()
+      await service.command(resume())
+      await service.command(command({ action: { kind: 'snooze', until: Date.UTC(2027, 2, 1, 10), origin: 'off-peak' }, expectedRevision: 1 }))
+      await settleDeletes()
+      expect(host.schedule!.deletes).toEqual(['schedule-1'])
+    })
   })
 
   it('validates input on the Host and refuses unknown sessions and pinned sessions', async () => {

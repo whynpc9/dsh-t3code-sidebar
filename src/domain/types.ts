@@ -104,6 +104,16 @@ export type Disposition =
     /** Turn-end seq at snooze time; a later failure wakes the task. */
     readonly baselineTurnEndSeq: number | null
     readonly baselineUserInputAt: number | null
+    /**
+     * Why the deadline was chosen: `off-peak` is the end of a DeepSeek peak
+     * pricing block. Absent for ordinary snoozes.
+     */
+    readonly origin?: 'off-peak'
+    /**
+     * "Resume at off-peak": the Harness schedule that sends the user's message
+     * into the session at `until`. Only its id is kept, never the message.
+     */
+    readonly resume?: { readonly scheduleId: string }
   }
   | {
     readonly kind: 'settled'

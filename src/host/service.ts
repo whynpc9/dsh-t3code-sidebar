@@ -5,6 +5,8 @@
  * - Folds committed `session/event`s into per-session activity summaries.
  * - Applies revision-checked, idempotent commands through one serial queue.
  * - Runs the policy scheduler (Snooze expiry + automatic settle).
+ * - "Resume at off-peak": arms a Harness schedule that messages the session at
+ *   the end of the peak block, and deletes it when the user takes over first.
  * - Publishes a baseline + ordered deltas to owner Clients.
  *
  * Remote methods are dispatched by the Gateway's SRC marker path; every
@@ -22,7 +24,8 @@ import {
 import { ACCESS_DENIED_CODE, NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
 import { decideAutoSettle } from '../domain/autosettle.ts'
 import {
-  acknowledgeResult, autoSettle, foldActivity, mergeHistory, reconcile, releaseHeldAutoSettle, reopen, setPolicyOverride, settle, snooze,
+  acknowledgeResult, attachResume, autoSettle, foldActivity, mergeHistory, reconcile, releaseHeldAutoSettle, reopen, resumeRefusal,
+  setPolicyOverride, settle, snooze,
   type FoldableEvent, type TaskErrorCode, type Transition,
 } from '../domain/commands.ts'
 import { effectivePolicy, graceSince, heldResult, isStricter, stricterWorkspaces } from '../domain/policy.ts'
@@ -32,7 +35,7 @@ import {
 } from '../domain/types.ts'
 import {
   optionalService,
-  type HostLiveSessions, type HostSession, type HostSessionActivity, type HostSessionEvent, type HostSessionHeader,
+  type HostLiveSessions, type HostScheduleService, type HostSession, type HostSessionActivity, type HostSessionEvent, type HostSessionHeader,
   type HostSessionReadHandle,
   type HostProjectionsValue, type HostSessionController, type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
 } from './harness.ts'
@@ -107,6 +110,11 @@ const MEMBERSHIP_MAX_AGE_MS = 1000
 /** A grace start older than the longest window cannot postpone any deadline. */
 const GRACE_RETENTION_MS = MAX_AUTO_SETTLE_DAYS * DAY_MS
 const PREVIEW_HELD_MAX = 200
+/** Title of the Harness schedule "Resume at off-peak" creates (shown under Automation tasks). */
+export const RESUME_TITLE = 'Off-peak resume'
+const SCHEDULE_TIMEOUT_MS = 10_000
+/** Delays before each attempt to delete a resume schedule the user overtook (best effort). */
+const RESUME_CANCEL_DELAYS = [0, 2_000, 10_000]
 
 type Domain = OpenDomain<TaskRecord, TransitionEntry, GlobalState>
 
@@ -190,7 +198,7 @@ export class T3SidebarService extends TypertRemoteService {
   private fallbackSweepAt = Date.now() + SWEEP_MS
   private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
-  private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false }
+  private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false, hostSchedule: false }
   private markReady: () => void = () => {}
   /**
    * Settles once storage is open and the startup catch-up has run, including
@@ -214,6 +222,7 @@ export class T3SidebarService extends TypertRemoteService {
       hostActivity: true,
       sessionEvents: true,
       hostPending: false,
+      hostSchedule: false,
     }
     this.ctx.on('session/event', (session: HostSession, event: HostSessionEvent) => {
       this.onSessionEvent(session, event)
@@ -268,12 +277,17 @@ export class T3SidebarService extends TypertRemoteService {
 
   @Remote('command')
   async command(t3CommandInput: unknown): Promise<CommandResult> {
+    // Read before any await: the caller is a property of this call's Context.
+    // No invocation means an in-process call, which acts as the owner.
+    const invocation = this.ctx.invocation
+    const owner = invocation === undefined || invocation.peer.principal.kind === 'owner'
     const parsed = CommandInputSchema.safeParse(t3CommandInput)
     if (!parsed.success) return { ok: false, code: 'PROTOCOL_MISMATCH', message: parsed.error.message, task: null }
     if (parsed.data.protocolVersion !== PROTOCOL_VERSION) {
       return { ok: false, code: 'PROTOCOL_MISMATCH', message: `protocol ${parsed.data.protocolVersion} unsupported`, task: null }
     }
-    return await this.queue.run(() => this.applyCommand(parsed.data))
+    const digest = await commandDigest(parsed.data.action)
+    return await this.queue.run(() => this.applyCommand(parsed.data, digest, owner))
   }
 
   @Remote('setPolicy')
@@ -365,14 +379,18 @@ export class T3SidebarService extends TypertRemoteService {
 
   // ── Commands ──────────────────────────────────────────────────────────────
 
-  private async applyCommand(input: CommandInput): Promise<CommandResult> {
+  /**
+   * `owner`: whether the caller is the Host owner. Snoozing with `resume`
+   * prompts the session on the user's behalf through the Harness scheduler,
+   * which the task grant a shared viewer may hold does not cover: owner only.
+   */
+  private async applyCommand(input: CommandInput, digest: string, owner: boolean): Promise<CommandResult> {
     const domain = this.requireDomain()
     const now = Date.now()
     if (!this.sessionKnown(input.sessionId)) {
       return { ok: false, code: 'NOT_FOUND', message: 'unknown session', task: null }
     }
     const current = this.recordOf(input.sessionId, now)
-    const digest = JSON.stringify(input.action)
     const receipt = current.receipts.find(entry => entry.commandId === input.commandId)
     if (receipt !== undefined) {
       if (receipt.digest !== digest) {
@@ -387,28 +405,59 @@ export class T3SidebarService extends TypertRemoteService {
     if (input.expectedRevision !== current.revision) {
       return { ok: false, code: 'CONFLICT', message: 'task changed', task: this.viewOf(current) }
     }
+    const resume = input.action.kind === 'snooze' ? input.action.resume : undefined
+    if (resume !== undefined && !owner) {
+      return { ok: false, code: 'FORBIDDEN', message: 'only the Host owner can schedule a message', task: this.viewOf(current) }
+    }
     const native = this.nativeOf(input.sessionId)
     const activity = await this.queryActivity(input.sessionId)
     const facts = this.factsOf(current, activity, input.observedPending, await this.queryDurablePending(input.sessionId))
     let transition: Transition
     switch (input.action.kind) {
-      case 'snooze': transition = snooze(current, facts, native, input.action.until, now); break
+      case 'snooze': transition = snooze(current, facts, native, input.action.until, now, input.action.origin); break
       case 'settle': transition = settle(current, facts, native, now); break
       case 'reopen': transition = reopen(current, now); break
       case 'policy-override': transition = setPolicyOverride(current, input.action.override, now); break
       case 'acknowledge-result': transition = acknowledgeResult(current, input.action.turnEndSeq); break
     }
+    if (transition.ok && resume !== undefined && input.action.kind === 'snooze') {
+      transition = resumeRefusal(facts, input.action.origin) ?? transition
+    }
     if (!transition.ok) {
       return { ok: false, code: transition.code satisfies TaskErrorCode, message: transition.message, task: this.viewOf(current) }
     }
+    let accepted = transition.record
+    let scheduleId: string | null = null
+    if (resume !== undefined) {
+      // Arm the message first: a record must never claim a schedule that does not exist.
+      const scheduler = this.scheduleService()
+      if (scheduler === undefined) {
+        return { ok: false, code: 'SCHEDULE_UNAVAILABLE', message: 'the Harness schedule service is unavailable', task: this.viewOf(current) }
+      }
+      const until = accepted.disposition.kind === 'snoozed' ? accepted.disposition.until : now
+      try {
+        const created = await scheduler.create({
+          title: RESUME_TITLE,
+          prompt: resume.prompt,
+          timing: { kind: 'at', at: new Date(until).toISOString() },
+          target: { kind: 'session', sessionId: input.sessionId },
+        }, undefined, AbortSignal.timeout(SCHEDULE_TIMEOUT_MS))
+        scheduleId = created.id
+      } catch (error) {
+        return { ok: false, code: 'SCHEDULE_UNAVAILABLE', message: `could not schedule the message: ${String(error)}`, task: this.viewOf(current) }
+      }
+      accepted = attachResume(accepted, scheduleId)
+    }
     const record: TaskRecord = {
-      ...transition.record,
-      receipts: [...current.receipts, { commandId: input.commandId, revision: transition.record.revision, digest }]
+      ...accepted,
+      receipts: [...current.receipts, { commandId: input.commandId, revision: accepted.revision, digest }]
         .slice(-RECEIPTS_PER_RECORD),
     }
     try {
       await this.commit(record, current, `manual:${input.action.kind}`, null)
     } catch (error) {
+      // Nothing was committed: the message must not be sent either.
+      if (scheduleId !== null) this.cancelResume(scheduleId)
       return { ok: false, code: 'STORAGE_UNAVAILABLE', message: String(error), task: this.viewOf(current) }
     }
     return { ok: true, task: this.viewOf(record), dataRevision: domain.global.get().dataRevision, replayed: false }
@@ -446,6 +495,41 @@ export class T3SidebarService extends TypertRemoteService {
     }
     this.publish([this.viewOf(record)], null)
     this.schedule()
+    // The user took over before the deadline (manual wake, new input, a new
+    // request or failure, a re-snooze): the scheduled message must not arrive
+    // in a session they are now driving. At or after the deadline it fires (or
+    // fired) at the same instant as the expiry, so it is left alone.
+    const resume = before.disposition.kind === 'snoozed' ? before.disposition.resume : undefined
+    if (resume !== undefined && before.disposition.kind === 'snoozed' && Date.now() < before.disposition.until) {
+      const kept = record.disposition.kind === 'snoozed' && record.disposition.resume?.scheduleId === resume.scheduleId
+      if (!kept) this.cancelResume(resume.scheduleId)
+    }
+  }
+
+  /** The Harness scheduler, when the Host has one this plugin can drive. */
+  private scheduleService(): HostScheduleService | undefined {
+    const service = optionalService<Partial<HostScheduleService>>(this.ctx, 'schedule')
+    return typeof service?.create === 'function' && typeof service.edit === 'function' ? service as HostScheduleService : undefined
+  }
+
+  /**
+   * Delete a resume schedule in the background with a few bounded retries.
+   * Never awaited: the state change it follows is already committed. An
+   * already-deleted task (`schedule_not_found`) counts as done.
+   */
+  private cancelResume(scheduleId: string, attempt = 0): void {
+    const delay = RESUME_CANCEL_DELAYS[attempt]
+    if (delay === undefined || this.disposed) return
+    const timer = setTimeout(() => {
+      this.pendingTimers.delete(timer)
+      const scheduler = this.scheduleService()
+      if (scheduler === undefined || this.disposed) return
+      scheduler.edit({ id: scheduleId, action: 'delete' }, undefined, AbortSignal.timeout(SCHEDULE_TIMEOUT_MS))
+        .then((result) => {
+          if (result.deleted !== true && result.code !== 'schedule_not_found') this.cancelResume(scheduleId, attempt + 1)
+        }, () => { this.cancelResume(scheduleId, attempt + 1) })
+    }, delay)
+    this.pendingTimers.add(timer)
   }
 
   private async appendTransition(entry: TransitionEntry): Promise<void> {
@@ -1268,7 +1352,8 @@ export class T3SidebarService extends TypertRemoteService {
       streamSeq: this.streamSeq,
       dataRevision: global.dataRevision,
       serverNow: Date.now(),
-      capabilities: this.capabilities,
+      // The schedule service may start (or stop) after this one.
+      capabilities: { ...this.capabilities, hostSchedule: this.scheduleService() !== undefined },
       policy: global.policy,
       tasks: this.allViews(),
     }
@@ -1411,6 +1496,17 @@ export function withPolicyGrace(global: GlobalState, policy: TimePolicy, now: nu
   }
   for (const workspaceId of fresh) workspaceEligibleSince[workspaceId] = now
   return { ...global, policy, policyEligibleSince: hostFresh ? now : global.policyEligibleSince, workspaceEligibleSince }
+}
+
+/**
+ * Receipt digest of a command action: its JSON, except that a resume message
+ * is replaced by its SHA-256 (receipts are stored; message text never is).
+ */
+export async function commandDigest(action: CommandInput['action']): Promise<string> {
+  if (action.kind !== 'snooze' || action.resume === undefined) return JSON.stringify(action)
+  const bytes = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(action.resume.prompt))
+  const promptSha256 = [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+  return JSON.stringify({ ...action, resume: { promptSha256 } })
 }
 
 /** Union of pending signals by request key (sources may differ for the same request). */

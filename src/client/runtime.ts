@@ -19,6 +19,11 @@ export interface Prefs {
    * stay in Active. Either way a session returns to Active when it needs you.
    */
   readonly workingSection: boolean
+  /**
+   * Offer "Until off-peak" in the Snooze menu during DeepSeek peak pricing
+   * hours. On by default.
+   */
+  readonly offPeakSnooze: boolean
   /** Explicit collapse state: `status:<section>` or `workspace:<group key>` → collapsed. */
   readonly collapsed: Readonly<Record<string, boolean>>
   /** Per-browser read marker: last turn-end seq seen in the main view. */
@@ -29,6 +34,7 @@ export const DEFAULT_PREFS: Prefs = {
   groupBy: 'status',
   archivedFilter: 'default',
   workingSection: false,
+  offPeakSnooze: true,
   collapsed: {},
   lastSeen: {},
 }
@@ -53,6 +59,7 @@ export function migratePrefs(raw: unknown): Prefs {
     ? raw['archivedFilter'] as ArchivedFilter
     : 'default'
   const workingSection = raw['workingSection'] === true
+  const offPeakSnooze = raw['offPeakSnooze'] !== false
   const collapsed: Record<string, boolean> = {}
   if (isRecord(raw['collapsed'])) {
     for (const [key, value] of Object.entries(raw['collapsed'])) {
@@ -65,7 +72,7 @@ export function migratePrefs(raw: unknown): Prefs {
   if (isRecord(raw['lastSeen'])) {
     for (const [key, value] of Object.entries(raw['lastSeen'])) if (typeof value === 'number') lastSeen[key] = value
   }
-  return { groupBy, archivedFilter, workingSection, collapsed, lastSeen }
+  return { groupBy, archivedFilter, workingSection, offPeakSnooze, collapsed, lastSeen }
 }
 
 export interface SearchPage {
@@ -124,6 +131,8 @@ export interface Runtime {
   notify(text: string): void
   /** Snooze-with-custom-time requests raised from the context menu. */
   readonly snoozeRequest: Store<string | null>
+  /** "Resume at off-peak…" requests raised from the context menu. */
+  readonly resumeRequest: Store<string | null>
   readonly notice: Store<{ readonly text: string; readonly seq: number } | null>
   /** Whether this plugin's registration renders `sidebar.workspaces` (S01 diagnostics). */
   readonly slotStatus: Readable<SlotStatus>

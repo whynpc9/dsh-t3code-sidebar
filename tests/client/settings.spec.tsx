@@ -3,8 +3,9 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { policyFromDraft, SettingsPage } from '../../src/client/components/SettingsPage.tsx'
+import { holidayYearsLabel, localPeakHours, policyFromDraft, SettingsPage } from '../../src/client/components/SettingsPage.tsx'
 import type { PolicyPreview } from '../../src/contracts/schema.ts'
+import { DEEPSEEK_SCHEDULE } from '../../src/domain/offpeak.ts'
 import type { TimePolicy } from '../../src/domain/types.ts'
 import { fakeRuntime, session, type FakeRuntime } from './runtime-fake.ts'
 
@@ -62,6 +63,22 @@ describe('policyFromDraft', () => {
   })
 })
 
+describe('off-peak schedule note', () => {
+  it('shows the peak blocks in the local time zone (America/New_York in the suite)', () => {
+    // 01:00–04:00 and 06:00–10:00 UTC are 20:00–23:00 and 01:00–05:00 in New York (EST, UTC−5).
+    const hours = localPeakHours(DEEPSEEK_SCHEDULE, Date.UTC(2026, 10, 16, 12))
+    const local = (h: number) => new Date(Date.UTC(2026, 10, 16, h)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    expect(hours).toBe(`${local(1)}–${local(4)}, ${local(6)}–${local(10)}`)
+    expect(new Date(Date.UTC(2026, 10, 16, 1)).getHours()).toBe(20)
+  })
+
+  it('names the bundled holiday years', () => {
+    expect(holidayYearsLabel([2027, 2026])).toBe('2026–2027')
+    expect(holidayYearsLabel([2026])).toBe('2026')
+    expect(holidayYearsLabel([2026, 2028])).toBe('2026, 2028')
+  })
+})
+
 describe('SettingsPage', () => {
   it('toggles the optional Working section, off by default', () => {
     const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy } })
@@ -72,6 +89,34 @@ describe('SettingsPage', () => {
     act(() => { toggle.click() })
     expect(runtime.prefs.getSnapshot().workingSection).toBe(true)
     expect(toggle.checked).toBe(true)
+  })
+
+  it('toggles off-peak snooze, on by default, and explains the schedule', () => {
+    const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy } })
+    const view = render(runtime)
+    const toggle = view.querySelectorAll<HTMLInputElement>('[data-testid="t3-display-settings"] [role="switch"]')[1]!
+    expect(toggle.getAttribute('aria-label')).toBe('settings.offPeakSnooze')
+    expect(toggle.checked).toBe(true)
+    act(() => { toggle.click() })
+    expect(runtime.prefs.getSnapshot().offPeakSnooze).toBe(false)
+    expect(toggle.checked).toBe(false)
+    const schedule = view.querySelector('[data-testid="t3-offpeak-schedule"]')!
+    expect(schedule.textContent).toContain('years=2026–2027')
+    expect(schedule.textContent).toContain(`settings.offPeakChecked(date=${DEEPSEEK_SCHEDULE.verifiedOn})`)
+    expect(schedule.querySelector('a')!.getAttribute('href')).toBe(DEEPSEEK_SCHEDULE.source)
+    expect(view.querySelector('[data-testid="t3-offpeak-now"]')!.textContent).toMatch(/^settings\.offPeakNow\./)
+  })
+
+  it('shows the current pricing phase on the Host clock', () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 10, 16, 2), toFake: ['Date'] })
+    try {
+      const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy, clockOffset: 0 } })
+      expect(render(runtime).querySelector('[data-testid="t3-offpeak-now"]')!.textContent).toMatch(/^settings\.offPeakNow\.peak\(time=/)
+      act(() => { runtime.backendStore.set({ ...runtime.backendStore.getSnapshot(), clockOffset: 3 * 3_600_000 }) })
+      expect(container!.querySelector('[data-testid="t3-offpeak-now"]')!.textContent).toMatch(/^settings\.offPeakNow\.offPeak\(time=/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('saves a workspace override chosen on the page', async () => {

@@ -25,6 +25,10 @@ export const DispositionSchema = z.discriminatedUnion('kind', [
     baselinePending: z.array(z.string()).readonly(),
     baselineTurnEndSeq: nullableNumber,
     baselineUserInputAt: nullableNumber,
+    /** Why the deadline was chosen; absent for ordinary snoozes (and records stored before it existed). */
+    origin: z.literal('off-peak').optional(),
+    /** "Resume at off-peak": the Harness schedule id (the message itself is never stored here). */
+    resume: z.object({ scheduleId: z.string() }).optional(),
   }),
   z.object({
     kind: z.literal('settled'),
@@ -88,6 +92,8 @@ export const CapabilitiesSchema = z.object({
   sessionEvents: z.boolean(),
   /** Host can see pending approvals/questions (false: only the browser can). */
   hostPending: z.boolean(),
+  /** Host reaches the Harness schedule service ("Resume at off-peak"); absent from older Hosts. */
+  hostSchedule: z.boolean().default(false),
 })
 
 export const SnapshotSchema = z.object({
@@ -115,8 +121,22 @@ export const FollowEventSchema = z.discriminatedUnion('kind', [
   }),
 ])
 
+/** Longest message "Resume at off-peak" sends, after trimming. */
+export const RESUME_PROMPT_MAX = 4000
+
 export const CommandActionSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('snooze'), until: z.number().int() }),
+  /**
+   * `origin: 'off-peak'`: `until` must be an off-peak boundary offered at the Host's now.
+   * `resume` (only with that origin): at `until` the Harness sends `prompt` into the session.
+   */
+  z.strictObject({
+    kind: z.literal('snooze'),
+    until: z.number().int(),
+    origin: z.literal('off-peak').optional(),
+    resume: z.strictObject({ prompt: z.string().trim().min(1).max(RESUME_PROMPT_MAX) }).optional(),
+  }).refine(action => action.resume === undefined || action.origin === 'off-peak', {
+    message: 'resume needs an off-peak deadline', path: ['resume'],
+  }),
   z.strictObject({ kind: z.literal('settle') }),
   z.strictObject({ kind: z.literal('reopen') }),
   z.strictObject({ kind: z.literal('policy-override'), override: z.enum(['inherit', 'disabled']) }),
@@ -143,6 +163,7 @@ export const CommandInputSchema = z.strictObject({
 export const ErrorCodeSchema = z.enum([
   'UNSUPPORTED_HOST', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'SESSION_ACTIVE', 'PENDING_APPROVAL', 'PINNED',
   'ARCHIVED', 'PENDING_INPUT', 'BASELINE_PENDING', 'INVALID_TIME', 'STORAGE_UNAVAILABLE', 'PROTOCOL_MISMATCH',
+  'SCHEDULE_UNAVAILABLE',
 ])
 
 export const CommandResultSchema = z.discriminatedUnion('ok', [

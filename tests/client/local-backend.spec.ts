@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalBackend } from '../../src/client/backend.ts'
 import { LocalRecordStore, type KeyValueStorage } from '../../src/client/local-store.ts'
 import { rowStatus } from '../../src/domain/placement.ts'
@@ -33,5 +33,31 @@ describe('LocalBackend', () => {
     expect(summary.lastTurnEnd?.reason).toBe('unknown')
     const status = rowStatus({ ...live.facts, summary }, null)
     expect(status).toBe('needs-check')
+  })
+
+  it('applies off-peak snoozes only at an off-peak boundary and stores the origin', async () => {
+    const storage = new MemoryStorage()
+    const backend = new LocalBackend('test', () => live, new LocalRecordStore(storage))
+    backends.push(backend)
+    const now = Date.UTC(2027, 2, 1, 7) // Monday 07:00 UTC, inside the 06:00–10:00 peak
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      const context = { ...live, observedPending: [] }
+      const off = Date.UTC(2027, 2, 1, 10)
+      expect(await backend.command('s1', { kind: 'snooze', until: off - 60_000, origin: 'off-peak' }, context))
+        .toMatchObject({ ok: false, code: 'INVALID_TIME' })
+      expect(await backend.command('s1', { kind: 'snooze', until: off, origin: 'off-peak' }, context))
+        .toMatchObject({ ok: true })
+      expect(backend.state.getSnapshot().tasks.get('s1')!.record.disposition).toMatchObject({ kind: 'snoozed', until: off, origin: 'off-peak' })
+      expect([...storage.data.values()].some(value => value.includes('"origin":"off-peak"'))).toBe(true)
+      expect(await backend.command('s2', { kind: 'snooze', until: off - 60_000 }, context)).toMatchObject({ ok: true })
+      expect('origin' in backend.state.getSnapshot().tasks.get('s2')!.record.disposition).toBe(false)
+      // No scheduler in a browser: resuming is refused and nothing changes.
+      expect(await backend.command('s3', { kind: 'snooze', until: off, origin: 'off-peak', resume: { prompt: 'Continue.' } }, context))
+        .toMatchObject({ ok: false, code: 'SCHEDULE_UNAVAILABLE' })
+      expect(backend.state.getSnapshot().tasks.has('s3')).toBe(false)
+    } finally {
+      clock.mockRestore()
+    }
   })
 })

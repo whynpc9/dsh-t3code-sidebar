@@ -73,6 +73,32 @@ export interface HostLiveSessions {
   list(): readonly { readonly header: HostSessionHeader }[]
 }
 
+/**
+ * The Host scheduler (`ctx.schedule`, `@deepseek-ai/dsh-schedule`), reduced to
+ * a one-shot reminder into one existing session and its deletion. `at` is an
+ * RFC 3339 instant with an explicit zone; it must be strictly in the future.
+ * Input errors reject (`ScheduleInputError`); an unknown id is a non-mutating miss.
+ * Management calls splice a non-waking "[SCHEDULE CHANGE]" notice into each
+ * involved live session except `actorSessionId` (undefined: a human caller).
+ */
+export interface HostScheduleService {
+  create(
+    request: {
+      readonly title: string
+      readonly prompt: string
+      readonly timing: { readonly kind: 'at'; readonly at: string }
+      readonly target: { readonly kind: 'session'; readonly sessionId: string }
+    },
+    actorSessionId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly id: string }>
+  edit(
+    request: { readonly id: string; readonly action: 'delete' },
+    actorSessionId?: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly id: string; readonly deleted?: true; readonly code?: string }>
+}
+
 export interface DomainTable<V> {
   get(key: string): V | undefined
   entries(): IterableIterator<[string, V]>
