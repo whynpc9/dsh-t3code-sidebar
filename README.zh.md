@@ -4,7 +4,7 @@
 
 为 DeepSeek Harness 提供 T3 Code 风格的任务侧栏：保留原生 Workspaces 的构图与操作，把会话按任务状态整理，也可按工作区或单列表查看。
 
-> 当前为 **v0.1.0 稳定版**。Linux Web + `@deepseek-ai/dsh` `0.2.2-rc.1` 已验证；macOS Desktop 仅部分验证，Windows 尚未验证。稳定发行标签不代表扩大这些支持范围。详见[支持矩阵与已知限制](docs/release.zh.md)。
+> 当前为 **v0.1.0 稳定版**。已验证 Linux Web + `@deepseek-ai/dsh` `0.2.2-rc.1`。macOS Desktop 仅部分验证，原定低峰边界投递和一次退出卡住仍待调查。Windows 尚未验证。详见[支持矩阵与已知限制](docs/release.zh.md)。
 
 ## 功能
 

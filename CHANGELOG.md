@@ -19,7 +19,7 @@ First stable release. Install with `dsh plugin --profile <profile> add dsh-t3cod
 ### Validation
 
 - PR [#12](https://github.com/whynpc9/dsh-t3code-sidebar/pull/12) covers Off-peak boundaries and holidays, UI and Host constraints, schedule creation, delivery and cancellation, and late delivery after Host downtime.
-- The [2026-11-17 Desktop record](docs/validation/desktop-v010-2026-11-17.md) verifies basic loading on macOS Desktop with Harness `0.2.2-rc.3`, ordinary Off-peak snooze without an Automation task, scheduled `Continue.` delivery and a completed second turn, and early-return cancellation. The final-package GUI matrix and the original M6 Desktop gate remain incomplete; stable versioning does not imply full Desktop acceptance.
+- macOS Desktop with Harness `0.2.2-rc.3` is partially verified. The candidate passed loading, uninstall and reinstall, keyboard shortcuts, off-peak snooze, and scheduled message creation, cancellation, and delivery after rescheduling. Delivery at the original off-peak boundary and a quit stall observed in testing remain open. See the [Desktop validation record](docs/validation/desktop-v010-2026-11-17.md#2026-11-18--010-候选包复验).
 
 ## 0.1.0-preview.0 — 2026-11-16
 

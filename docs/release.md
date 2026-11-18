@@ -23,13 +23,13 @@ The `0.1.0` candidate uses the Off-peak implementation reviewed in PR #12. Regis
 
 ## 2. Release tiers and current position
 
-`0.1.0` targets npm `latest`. The v0.1 release plan requires Web and Desktop acceptance.
+`0.1.0` ships on npm `latest` with the verified Linux Web support listed above. Full macOS Desktop validation (M6) will continue after this release. Two follow-ups are delivery at the original off-peak boundary and the quit stall observed during the first candidate run.
 
 | Tier | Exit criteria | Status |
 | --- | --- | --- |
 | R0 internal alpha | Installable in a test profile; task view, native actions, manual Snooze/Settled | Achieved |
 | v0.1-preview (Linux Web) | Evidence on Linux Web for F01–F11, A01–A12, T01–T09, and the time portions of T12 | **`0.1.0-preview.0` released**: evidence exists for every item; see sections 4 and 5 for uncovered cases |
-| v0.1 full Web + Desktop gate | macOS Desktop installation, uninstallation, and GUI acceptance in addition to preview | **Pending**: Desktop M6 verification is incomplete |
+| Full macOS Desktop support (M6) | macOS Desktop installation, uninstallation, and GUI acceptance | **Partial**. Remaining validation is deferred for `0.1.0`. |
 
 ## 3. Installation, upgrades, and rollback
 

@@ -23,13 +23,13 @@
 
 ## 2. 发布分层与当前位置
 
-`0.1.0` 的目标发布通道为 npm `latest`。v0.1 的发布计划要求通过 Web 和 Desktop 验收。
+`0.1.0` 通过 npm `latest` 发布，正式支持上表所列的 Linux Web 环境。完整 macOS Desktop 验收（M6）延至发布后，继续验证原定低峰边界投递并调查首轮候选包测试中的退出卡住。
 
 | 层 | 出口条件 | 状态 |
 | --- | --- | --- |
 | R0 内部 alpha | 测试 profile 可安装；任务视图、原生动作、手动 Snooze/Settled | 已达成 |
 | v0.1-preview（Linux Web） | Linux Web 上 F01–F11、A01–A12、T01–T09、T12 时间部分全部有证据 | **已发布 `0.1.0-preview.0`**：各项均有证据，未覆盖部分见第 4、5 节 |
-| v0.1 完整 Web + Desktop 门禁 | preview 基础上 macOS Desktop 安装、卸载与 GUI 验收 | **待通过**：Desktop M6 验收未完成 |
+| macOS Desktop 完整支持（M6） | macOS Desktop 安装、卸载与 GUI 验收 | **部分验证**，其余场景延至 `0.1.0` 发布后。 |
 
 ## 3. 安装、升级、回滚
 

@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 A T3 Code-style task sidebar for DeepSeek Harness. It preserves the native Workspaces layout and interactions while organizing sessions by task status, workspace, or one list.
 
-> **v0.1.0 stable**. Linux Web with `@deepseek-ai/dsh` `0.2.2-rc.1` is verified; macOS Desktop is partially verified, and Windows is unverified. The stable release channel does not change those support limits. See the [support matrix and known limitations](docs/release.md).
+> **v0.1.0 stable**. Linux Web with `@deepseek-ai/dsh` `0.2.2-rc.1` is verified. macOS Desktop is partially verified, with delivery at the original off-peak boundary and a quit stall observed in testing still to investigate. Windows is unverified. See the [support matrix and known limitations](docs/release.md).
 
 ## Features
 
