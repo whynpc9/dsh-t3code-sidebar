@@ -1,6 +1,6 @@
 {
   "name": "dsh-t3code-sidebar",
-  "version": "0.1.0-preview.0",
+  "version": "0.1.0",
   "description": "T3 Code style task sidebar for DeepSeek Harness, composed like the native Workspaces browser: group sessions by status (Pinned / Active / Working / Snoozed / Settled), by workspace, or in one list.",
   "license": "MIT",
   "repository": {
@@ -40,9 +40,6 @@
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
-  "publishConfig": {
-    "tag": "preview"
-  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -70,8 +67,7 @@
     "pack:check": "node scripts/pack-check.mjs",
     "holidays:update": "node scripts/update-holidays.mjs",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check",
-    "prepublishOnly": "pnpm run verify",
-    "release:preview": "pnpm publish --tag preview"
+    "prepublishOnly": "pnpm run verify"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
