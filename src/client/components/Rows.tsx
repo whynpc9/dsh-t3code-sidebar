@@ -4,7 +4,7 @@
  * dot, marquee title, relative time; hover swaps the time for the action
  * strip) and a 48px search result. All data and callbacks arrive via props.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react'
 import {
   HoverCard, IconAlarmClockOutlineRegular, IconArchiveOutlineRegular, IconCheckCircleOutlineRegular,
   IconEditOutlineRegular, IconEllipsisOutlineRegular, IconNewChatOutlineRegular, IconPinFillRegular, IconPinOutlineRegular,
@@ -40,8 +40,6 @@ export interface RowEnv {
   /** The status grouping already names the task state, so rows skip its indicator there. */
   readonly statusGrouping: boolean
   readonly menu: ContextMenuBindings | undefined
-  /** Session id whose context menu is open. */
-  readonly menuSessionId: string | null
   /** Open one session (archived ones explain instead). */
   readonly open: (row: Row) => void
 }
@@ -267,18 +265,35 @@ function MoreButton({ row, env, title, menuOpen }: { row: Row; env: RowEnv; titl
   )
 }
 
-export function SessionRow({ row, env, showPin, position }: {
+export function useSessionMenuId(runtime: Runtime, members?: readonly Row[]): string | null {
+  const source = runtime.menuTarget
+  const snapshot = () => {
+    const target = source.getSnapshot()
+    const id = target?.kind === 'session' ? target.value['sessionId'] : null
+    if (typeof id !== 'string') return null
+    return members === undefined || members.some(row => row.sessionId === id) ? id : null
+  }
+  return useSyncExternalStore(source.subscribe, snapshot, snapshot)
+}
+
+export function GroupSessionRows({ rows, env, showPin }: { rows: readonly Row[]; env: RowEnv; showPin: boolean }) {
+  const menuId = useSessionMenuId(env.runtime, rows)
+  return rows.map(row => <SessionRow key={row.sessionId} row={row} env={env} showPin={showPin} menuOpen={row.sessionId === menuId} />)
+}
+
+export const SessionRow = memo(function SessionRow({ row, env, showPin, menuOpen, position, count }: {
   row: Row
   env: RowEnv
   showPin: boolean
-  position?: { index: number; count: number }
+  menuOpen: boolean
+  position?: number
+  count?: number
 }) {
   const { t, now } = env
   const title = displayTitle(row, t)
   const status = statusOf(row, t)
   const compact = COMPACT[row.status]
   const archived = row.native.archived
-  const menuOpen = env.menuSessionId === row.sessionId
   const rowRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLSpanElement>(null)
   const marquee = useTitleMarquee(titleRef)
@@ -314,8 +329,8 @@ export function SessionRow({ row, env, showPin, position }: {
       className={cx('t3sb-session-row', row.current && 't3sb-selected', menuOpen && 't3sb-menu-open', archived && 't3sb-archived')}
       role="treeitem"
       aria-selected={row.current}
-      aria-posinset={position?.index}
-      aria-setsize={position?.count}
+      aria-posinset={position}
+      aria-setsize={count}
       aria-description={archived ? t('toast.archivedNotOpenable') : undefined}
       tabIndex={0}
       onClick={() => { env.open(row) }}
@@ -370,7 +385,7 @@ export function SessionRow({ row, env, showPin, position }: {
       copiedLabel={t('hover.copied')}
     />
   )
-}
+})
 
 // ── Group header row ─────────────────────────────────────────────────────────
 
