@@ -257,13 +257,21 @@ describe('preferences', () => {
     expect(migratePrefs({ groupBy: 'status' }).workingSection).toBe(false)
   })
 
+  it('keeps history search off unless it was switched on', () => {
+    expect(DEFAULT_PREFS.historySearch).toBe(false)
+    expect(migratePrefs({ historySearch: true }).historySearch).toBe(true)
+    expect(migratePrefs({ historySearch: 1 }).historySearch).toBe(false)
+    // The R0 alpha content-search field does not carry over.
+    expect(migratePrefs({ includeContent: true }).historySearch).toBe(false)
+  })
+
   it('migrates the R0 alpha shape', () => {
     const migrated = migratePrefs({
       view: 'projects', scope: 'w1', includeContent: true,
       collapsed: { 'tasks:settled': false, 'projects:p:w1': true, 'status:active': true }, lastSeen: { a: 3, b: 'x' },
     })
     expect(migrated).toEqual({
-      groupBy: 'workspace', archivedFilter: 'default', workingSection: false, offPeakSnooze: true,
+      groupBy: 'workspace', archivedFilter: 'default', workingSection: false, offPeakSnooze: true, historySearch: false,
       collapsed: { 'status:settled': false, 'status:active': true }, lastSeen: { a: 3 },
     })
     expect(migratePrefs({ view: 'tasks' }).groupBy).toBe('status')

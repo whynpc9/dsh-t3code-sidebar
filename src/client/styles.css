@@ -745,6 +745,12 @@
 .t3sb-session-row.t3sb-archived .t3sb-title,
 .t3sb-search-row.t3sb-archived .t3sb-search-title,
 .t3sb-search-row.t3sb-archived .t3sb-search-workspace,
+.t3sb-search-mark {
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
 .t3sb-search-row.t3sb-archived .t3sb-search-snippet {
   color: var(--dsw-alias-label-caption);
 }

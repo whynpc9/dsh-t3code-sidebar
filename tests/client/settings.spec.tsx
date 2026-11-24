@@ -91,6 +91,20 @@ describe('SettingsPage', () => {
     expect(toggle.checked).toBe(true)
   })
 
+  it('toggles history search, off by default, and says when the Host is missing', () => {
+    const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy } })
+    const view = render(runtime)
+    const row = view.querySelector('[data-testid="t3-history-search-setting"]')!
+    const toggle = row.querySelector<HTMLInputElement>('[role="switch"]')!
+    expect(toggle.getAttribute('aria-label')).toBe('settings.historySearch')
+    expect(toggle.checked).toBe(false)
+    expect(row.textContent).not.toContain('settings.historySearchHost')
+    act(() => { toggle.click() })
+    expect(runtime.prefs.getSnapshot().historySearch).toBe(true)
+    act(() => { runtime.backendStore.set({ ...runtime.backendStore.getSnapshot(), kind: 'local' }) })
+    expect(row.textContent).toContain('settings.historySearchHost')
+  })
+
   it('toggles off-peak snooze, on by default, and explains the schedule', () => {
     const runtime = fakeRuntime({ sessions: [session('s1')], workspaces, backend: { policy } })
     const view = render(runtime)

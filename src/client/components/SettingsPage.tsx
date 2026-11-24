@@ -279,6 +279,15 @@ export function SettingsPage({ runtime, view = 'page' }: SettingsPageProps) {
           <Switch checked={prefs.offPeakSnooze} label={t('settings.offPeakSnooze')}
             onChange={(next) => { runtime.prefs.set({ ...runtime.prefs.getSnapshot(), offPeakSnooze: next }) }} />
         </div>
+        <div className="t3sb-settings-row" data-testid="t3-history-search-setting">
+          <span className="t3sb-settings-label">
+            <span>{t('settings.historySearch')}</span>
+            <span className="t3sb-dialog-note">{t('settings.historySearchNote')}</span>
+            {!host && <span className="t3sb-dialog-note">{t('settings.historySearchHost')}</span>}
+          </span>
+          <Switch checked={prefs.historySearch} label={t('settings.historySearch')}
+            onChange={(next) => { runtime.prefs.set({ ...runtime.prefs.getSnapshot(), historySearch: next }) }} />
+        </div>
       </section>
       {host && (
         <section>

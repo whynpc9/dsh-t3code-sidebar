@@ -250,3 +250,42 @@ export type PreviewInput = z.infer<typeof PreviewInputSchema>
 export type PolicyPreview = z.infer<typeof PolicyPreviewSchema>
 export type HeldResult = z.infer<typeof HeldResultSchema>
 export type Capabilities = z.infer<typeof CapabilitiesSchema>
+
+/** Most history hits one search returns (the Client shows fewer). */
+export const HISTORY_SEARCH_LIMIT_MAX = 200
+
+export const HistorySearchInputSchema = z.object({
+  protocolVersion: z.number(),
+  /** Literal text; matched case- and width-insensitively within one message. */
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(HISTORY_SEARCH_LIMIT_MAX),
+})
+export type HistorySearchInput = z.infer<typeof HistorySearchInputSchema>
+
+export const HistoryHitSchema = z.object({
+  sessionId: z.string(),
+  seq: z.number(),
+  at: z.number(),
+  role: z.enum(['user', 'assistant']),
+  snippet: z.string(),
+  /** UTF-16 half-open range of the match inside `snippet`. */
+  highlight: z.tuple([z.number(), z.number()]),
+})
+export type HistoryHit = z.infer<typeof HistoryHitSchema>
+
+export const HistorySearchResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    hits: z.array(HistoryHitSchema),
+    hasMore: z.boolean(),
+    /** Every stored session was read; false while indexing or after a failed read. */
+    complete: z.boolean(),
+    progress: z.object({ indexed: z.number(), total: z.number() }).nullable(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    code: z.enum(['FORBIDDEN', 'UNSUPPORTED', 'PROTOCOL_MISMATCH']),
+    message: z.string(),
+  }),
+])
+export type HistorySearchResult = z.infer<typeof HistorySearchResultSchema>

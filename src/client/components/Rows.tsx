@@ -488,7 +488,17 @@ export function WorkspaceHoverContent({ title, path, createdAt, t }: { title: st
 
 // ── Search result ────────────────────────────────────────────────────────────
 
-export function SearchResultRow({ row, snippet, place, env }: { row: Row; snippet: string | null; place: string; env: RowEnv }) {
+/** A snippet with its match marked; text nodes only, never HTML. */
+function SnippetText({ text, highlight }: { text: string; highlight: readonly [number, number] | null }) {
+  if (highlight === null) return <>{text}</>
+  const [start, end] = highlight
+  if (!(start >= 0 && start < end && end <= text.length)) return <>{text}</>
+  return <>{text.slice(0, start)}<mark className="t3sb-search-mark">{text.slice(start, end)}</mark>{text.slice(end)}</>
+}
+
+export function SearchResultRow({ row, snippet, highlight = null, place, env }: {
+  row: Row; snippet: string | null; highlight?: readonly [number, number] | null; place: string; env: RowEnv
+}) {
   const { t } = env
   const archived = row.native.archived
   const status = statusOf(row, t)
@@ -523,7 +533,7 @@ export function SearchResultRow({ row, snippet, place, env }: { row: Row; snippe
       </span>
       <span className="t3sb-search-meta">
         <span className="t3sb-search-workspace">{place === '' ? t('group.ungrouped') : place}</span>
-        {snippet !== null && <span className="t3sb-search-snippet">{snippet}</span>}
+        {snippet !== null && <span className="t3sb-search-snippet"><SnippetText text={snippet} highlight={highlight} /></span>}
       </span>
     </div>
   )
