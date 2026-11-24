@@ -43,7 +43,7 @@ import {
   type HostSessionReadHandle,
   type HostProjectionsValue, type HostSessionController, type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
 } from './harness.ts'
-import { HistoryIndex, type HistorySource } from './history-index.ts'
+import { HistoryIndex, HistoryUnavailableError, type HistorySource } from './history-index.ts'
 
 const GlobalSchema = z.object({
   installationId: z.string(),
@@ -405,7 +405,13 @@ export class T3SidebarService extends TypertRemoteService {
       return { ok: false, code: 'UNSUPPORTED', message: 'session persistence cannot be read on this Host' }
     }
     this.history ??= new HistoryIndex(historySource(persistence))
-    const result = await this.history.search(parsed.data.query, parsed.data.limit, signal ?? new AbortController().signal)
+    let result
+    try {
+      result = await this.history.search(parsed.data.query, parsed.data.limit, signal ?? new AbortController().signal)
+    } catch (error) {
+      if (error instanceof HistoryUnavailableError) return { ok: false, code: 'UNAVAILABLE', message: error.message }
+      throw error
+    }
     return {
       ok: true,
       hits: result.hits.map(hit => ({ ...hit, highlight: [hit.highlight[0], hit.highlight[1]] })),

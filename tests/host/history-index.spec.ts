@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { HistoryIndex, type HistorySource } from '../../src/host/history-index.ts'
+import { HistoryIndex, HistoryUnavailableError, type HistorySource } from '../../src/host/history-index.ts'
 import type { HistoryEvent } from '../../src/domain/history-text.ts'
 
 interface FakeSession { createdAt: number; token: string; events: HistoryEvent[]; fail?: boolean }
@@ -14,10 +14,12 @@ function fakeSource(sessions: Map<string, FakeSession>) {
   let lists = 0
   let gate: Promise<void> | null = null
   let listGate: Promise<void> | null = null
+  let listFails = false
   const source: HistorySource = {
     async list() {
       lists++
       if (listGate !== null) await listGate
+      if (listFails) throw new Error('listing failed')
       return [...sessions].map(([id, session]) => ({ id, createdAt: session.createdAt, token: session.token }))
     },
     async read(id, offset) {
@@ -31,6 +33,7 @@ function fakeSource(sessions: Map<string, FakeSession>) {
   return {
     source, reads,
     get lists() { return lists },
+    failList(value: boolean) { listFails = value },
     hold() { let release!: () => void; gate = new Promise((resolve) => { release = resolve }); return () => { gate = null; release() } },
     holdList() { let release!: () => void; listGate = new Promise((resolve) => { release = resolve }); return () => { listGate = null; release() } },
   }
@@ -267,6 +270,60 @@ describe('HistoryIndex', () => {
     expect(index.stats().units).toBeLessThanOrEqual(5000)
     expect((await index.search('m100', 50, signal())).hits).toHaveLength(1)
     expect((await index.search('m095', 50, signal())).hits).toEqual([])
+  })
+
+  it('reports a changed log as not up to date until its catch-up read finishes', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: true, reading: false })
+    // New messages committed while nobody observed them live; the read is slow.
+    sessions.set('a', { createdAt: 1, token: 't2', events: [message(0, 'hello'), message(1, 'needle')] })
+    const release = fake.hold()
+    now = 100
+    expect(await index.search('needle', 10, signal())).toMatchObject({ hits: [], complete: false, reading: true, progress: { indexed: 0, total: 1 } })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const result = await index.search('needle', 10, signal())
+    expect(result).toMatchObject({ complete: true, reading: false })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('says unavailable when the first listing fails, and lists again on the next search', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }]])
+    const fake = fakeSource(sessions)
+    fake.failList(true)
+    const index = create(fake.source)
+    await expect(index.search('needle', 10, signal())).rejects.toBeInstanceOf(HistoryUnavailableError)
+    fake.failList(false)
+    expect((await index.search('needle', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('discards a read of a session evicted while the read was in flight', async () => {
+    const pad = (text: string) => `${text} ${'x'.repeat(90)}`
+    const sessions = new Map<string, FakeSession>([
+      ['old', { createdAt: 1, token: 't1', events: [message(0, pad('alpha'))] }],
+      ['new', { createdAt: 2, token: 't1', events: [message(0, pad('beta'))] }],
+    ])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { maxUnits: 300, refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    expect((await index.search('x', 10, signal())).hits).toHaveLength(2)
+    // Both logs grow; the newer one grows past the budget while the older one's read is in flight.
+    sessions.set('old', { createdAt: 1, token: 't2', events: [message(0, pad('alpha')), message(1, 'oldtail')] })
+    sessions.set('new', { createdAt: 2, token: 't2', events: [message(0, pad('beta')), message(1, pad(`newtail ${'y'.repeat(50)}`))] })
+    const release = fake.hold()
+    now = 100
+    await index.search('x', 10, signal())
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const result = await index.search('oldtail', 10, signal())
+    // The older session gave way: neither its text nor its tail is held, and the result says so.
+    expect(result).toMatchObject({ hits: [], complete: false, limited: true })
+    expect((await index.search('alpha', 10, signal())).hits).toEqual([])
+    expect((await index.search('newtail', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['new'])
+    expect(index.stats().units).toBeLessThanOrEqual(300)
   })
 
   it('says reading only while sessions are still to be listed or read', async () => {

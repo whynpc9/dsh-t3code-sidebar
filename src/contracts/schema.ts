@@ -288,7 +288,7 @@ export const HistorySearchResultSchema = z.discriminatedUnion('ok', [
   }),
   z.object({
     ok: z.literal(false),
-    code: z.enum(['FORBIDDEN', 'UNSUPPORTED', 'PROTOCOL_MISMATCH']),
+    code: z.enum(['FORBIDDEN', 'UNSUPPORTED', 'UNAVAILABLE', 'PROTOCOL_MISMATCH']),
     message: z.string(),
   }),
 ])

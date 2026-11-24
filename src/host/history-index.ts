@@ -63,6 +63,14 @@ export interface HistoryStats {
   readonly units: number
 }
 
+/** The sessions could not be listed and nothing is indexed: the caller should fall back. */
+export class HistoryUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super('session history could not be listed', { cause })
+    this.name = 'HistoryUnavailableError'
+  }
+}
+
 export interface HistoryIndexOptions {
   /** Re-list sessions at most this often (on search). */
   readonly refreshMs?: number
@@ -103,12 +111,14 @@ interface Entry {
   limited: boolean
   /** Held, but only its newest messages (larger than the budget alone). */
   trimmed: boolean
+  /** Indexed, but the log changed and the read that catches up has not finished. */
+  stale: boolean
 }
 
 const eventKey = (event: HistoryEvent): string => `${event.seq}|${event.type}|${event.time}`
 const emptyEntry = (createdAt: number): Entry => ({
   createdAt, token: undefined, offset: 0, lastSeq: -1, lastKey: '', fullAt: 0, body: new SessionText(),
-  indexed: false, failed: false, limited: false, trimmed: false,
+  indexed: false, failed: false, limited: false, trimmed: false, stale: false,
 })
 /** Whether `left` gives way before `right` (older first; id breaks ties). */
 const yieldsTo = (left: [string, Entry], right: [string, Entry]): boolean =>
@@ -125,6 +135,8 @@ export class HistoryIndex {
   private listed = false
   private listedAt = 0
   private listing: Promise<void> | undefined
+  /** Why the last listing failed, while nothing has been listed yet. */
+  private listError: unknown
   private controller = new AbortController()
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
@@ -173,6 +185,12 @@ export class HistoryIndex {
     const sync = this.refresh()
     if (sync !== undefined) await waitAtMost(sync, ready ? this.refreshWaitMs : this.waitMs, signal)
     signal.throwIfAborted()
+    if (!this.listed && this.listing === undefined && this.listError !== undefined) {
+      // The first listing failed: say so (the next search lists again) rather than "still reading".
+      const error = this.listError
+      this.listError = undefined
+      throw new HistoryUnavailableError(error)
+    }
     const hits: HistoryHit[] = []
     let scanned = 0
     for (const [sessionId, entry] of this.entries) {
@@ -192,8 +210,9 @@ export class HistoryIndex {
     let failed = false
     let limited = false
     for (const entry of this.entries.values()) {
-      if (entry.indexed) indexed++
-      else if (!entry.failed && !entry.limited) pending++
+      // A changed log whose catch-up read is still running is not up to date yet.
+      if (entry.indexed && !entry.stale) indexed++
+      else if (entry.stale || (!entry.failed && !entry.limited)) pending++
       if (entry.failed) failed = true
       if (entry.limited || entry.trimmed) limited = true
     }
@@ -244,6 +263,7 @@ export class HistoryIndex {
     this.listed = false
     this.listedAt = 0
     this.listing = undefined
+    this.listError = undefined
     if (this.idleTimer !== undefined) clearTimeout(this.idleTimer)
     this.idleTimer = undefined
   }
@@ -264,7 +284,9 @@ export class HistoryIndex {
     if (this.listing !== undefined) return this.listing
     if (this.listed && this.now() - this.listedAt < this.refreshMs) return undefined
     const signal = this.controller.signal
-    const pass = this.sync(signal).catch(() => undefined).finally(() => {
+    const pass = this.sync(signal).catch((error: unknown) => {
+      if (!signal.aborted && !this.listed) this.listError = error
+    }).finally(() => {
       if (this.listing === pass) this.listing = undefined
     })
     this.listing = pass
@@ -274,6 +296,7 @@ export class HistoryIndex {
   private async sync(signal: AbortSignal): Promise<void> {
     const listing = await this.source.list(signal)
     if (signal.aborted) return
+    this.listError = undefined
     const now = this.now()
     const present = new Set(listing.map(item => item.id))
     // Absent from a successful listing: deleted (or no longer stored); drop its text.
@@ -291,7 +314,10 @@ export class HistoryIndex {
       }
       entry.createdAt = item.createdAt
       const full = !entry.indexed || now - entry.fullAt >= this.fullReadMs
-      if (full || entry.failed || item.token === undefined || item.token !== entry.token) due.push({ id: item.id, token: item.token, full })
+      const changed = item.token !== undefined && item.token !== entry.token
+      // Known to have changed: results stay incomplete until the read catches up.
+      if (entry.indexed && changed) entry.stale = true
+      if (full || entry.failed || changed || item.token === undefined) due.push({ id: item.id, token: item.token, full })
     }
     this.listed = true
     this.listedAt = now
@@ -329,9 +355,11 @@ export class HistoryIndex {
     } catch {
       events = null
     }
+    // Aborted, deleted or evicted meanwhile (evicting replaces the entry): commit nothing.
     if (signal.aborted || this.entries.get(id) !== entry) return false
     if (events === null) {
       entry.failed = true
+      entry.stale = false
       return false
     }
     if (overlap) {
@@ -366,6 +394,7 @@ export class HistoryIndex {
     entry.indexed = true
     entry.failed = false
     entry.limited = false
+    entry.stale = false
     if (full) entry.trimmed = false
     return this.enforceBudget(id, entry)
   }
@@ -388,23 +417,27 @@ export class HistoryIndex {
     while (this.units > this.maxUnits) {
       const victim = this.oldestHolder([id, entry])
       if (victim !== undefined) {
-        this.evict(victim[1])
+        this.evict(victim[0], victim[1])
         continue
       }
       // Every other holder is newer: this session keeps only its newest messages that still fit.
       this.units -= entry.body.units
       entry.body.keepNewest(Math.max(0, this.maxUnits - this.units))
       this.units += entry.body.units
-      if (entry.body.documents === 0) this.evict(entry)
+      if (entry.body.documents === 0) this.evict(id, entry)
       else entry.trimmed = true
       return true
     }
     return false
   }
 
-  private evict(entry: Entry): void {
+  /**
+   * Drop a session's text. The entry is replaced, not emptied in place, so a
+   * read of it still in flight sees the change and discards what it read.
+   */
+  private evict(id: string, entry: Entry): void {
     this.units -= entry.body.units
-    Object.assign(entry, emptyEntry(entry.createdAt), { limited: true })
+    this.entries.set(id, { ...emptyEntry(entry.createdAt), limited: true })
   }
 }
 
