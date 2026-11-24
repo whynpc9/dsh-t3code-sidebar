@@ -1,19 +1,31 @@
 # Changelog
 
-`0.1.0-preview.0` is the first npm release (v0.1-preview, Linux Web), published under the `preview` dist-tag. Earlier versions were internal alphas (R0) and were never published. The verified runtime is `@deepseek-ai/dsh` `0.2.2-rc.1`; see [docs/release.md](docs/release.md) for the support matrix, release gates and known limitations.
+The release workflow uses npm's `latest` dist-tag for `0.1.0`. `0.1.0-preview.0` was the first public version, published under `preview`; earlier versions were internal alphas (R0) and were never published. The primary verified runtime is Linux Web with `@deepseek-ai/dsh` `0.2.2-rc.1`. See the [support matrix and known limitations](docs/release.md).
 
 ## Unreleased
 
 ### Added
 
-- **Snooze until off-peak.** During DeepSeek peak pricing hours (01:00–04:00 and 06:00–10:00 UTC on working days, excluding Chinese public holidays), a session's **Snooze** menu starts with **Until off-peak**, which hides it until the half-price hours begin; when that window is short, **Until longer off-peak** is offered too. It is not offered while the session is working, and it never sends a prompt or pauses the agent. The row then reads “Off-peak at …”. Turn it off under **Plugins → dsh-t3code-sidebar → Sidebar → Off-peak snooze**, which also shows the peak hours in your time zone. The choice is stored per browser.
-- **Resume at off-peak.** Next to **Until off-peak**, an idle session on the Host also offers **Resume at off-peak…**: pick the off-peak window, write a message (default “Continue.”), and at that time the Harness sends it into the session as a scheduled task, so the agent continues on its own at half price. The row reads “Resumes at …”, and the task is listed under the Harness's **Automation tasks**. **Return now and cancel resume**, a message you send, or a new question, approval or failure before then deletes the scheduled task. Only the Host owner can use it; the browser-only preview and Hosts without the scheduler do not offer it. The message is sent by the Harness and is never stored in this plugin's records.
-
 - **Message history search (optional, off by default).** Turn on **Plugins → dsh-t3code-sidebar → Sidebar → Search message history** and the sidebar search also finds the text of your messages and the agent's replies in every stored session, not only session names, with the match highlighted in the result. The Host reads sessions through read-only handles on the first search (never resuming or starting one), keeps the text in memory only, picks up new messages as they are committed, and releases everything 30 minutes after the last search. Matching is literal within one message and ignores case, full-/half-width forms and traditional/simplified Chinese characters (OpenCC character table), so one- and two-character Chinese queries and the oldest sessions are found too; while sessions are still being read the sidebar says so instead of “No matching sessions”. Sessions are read newest first, and the text kept is capped (about 180 MB of Host memory, roughly 250,000 messages of a few hundred characters): beyond it older sessions are left out and the sidebar says how many were searched. On a 5,000-session profile the first search after a Host start reads everything in about 70 seconds while showing results as they come; later searches answer in tens of milliseconds. Reasoning, tool calls and results, injected context and compaction summaries are never indexed. Only the Host owner can use it; otherwise, and on older Hosts or the browser-only preview, the built-in search is used. The choice is stored per browser (#13).
+
+## 0.1.0 — 2026-11-18
+
+First stable release. Install with `dsh plugin --profile <profile> add dsh-t3code-sidebar@0.1.0` (or `@latest` for the current stable version).
+
+### Added
+
+- **Snooze until off-peak.** During DeepSeek peak pricing hours (01:00–04:00 and 06:00–10:00 UTC, Monday–Friday, excluding Chinese public holidays), a non-working session's **Snooze** menu starts with **Until off-peak**, which hides it until the half-price hours begin. When the next Off-peak window is under four hours, **Until longer off-peak** targets the first later window of at least four hours. The row reads “Off-peak at …” and returns to Active at the boundary; no prompt is sent, no Automation task is created, and the agent is not paused. Bundled holiday data covers 2026–2027 and falls back to weekdays for other years.
+- **Resume at off-peak.** A known-idle session on the Host also offers **Resume at off-peak…**: pick the Off-peak window, edit the non-empty message (default “Continue.” / “继续。”), and create a one-shot **Off-peak resume** task. At that time the Harness sends the message into the session so the agent can continue at half price. The row reads “Resumes at …”, and the task is visible and deletable under the Harness's **Automation tasks**. **Return now and cancel resume**, **Settle**, a message you send, or a new question, approval or failure before then cancels the scheduled message. Only the Host owner can use it; the browser-only fallback and Hosts without the scheduler do not offer it. The message text is never stored in this plugin's records; receipts retain only its SHA-256 digest.
+- **Off-peak setting and schedule display.** **Plugins → dsh-t3code-sidebar → Sidebar → Off-peak snooze** controls both actions, is on by default, and is stored per browser. The setting shows the current pricing phase, peak hours in your time zone, the schedule verification date, and a DeepSeek pricing link. Turning it off hides new Off-peak actions but does not cancel an existing resume.
 
 ### Changed
 
 - **Optional Working section.** The Working section is now off by default: running sessions stay in Active. Turn it on under **Plugins → dsh-t3code-sidebar → Sidebar → Working section** to fold working sessions into their own section; they still return to Active when they need you. The choice is stored per browser.
+
+### Validation
+
+- PR [#12](https://github.com/whynpc9/dsh-t3code-sidebar/pull/12) covers Off-peak boundaries and holidays, UI and Host constraints, schedule creation, delivery and cancellation, and late delivery after Host downtime.
+- macOS Desktop with Harness `0.2.2-rc.3` is partially verified. The candidate passed loading, uninstall and reinstall, keyboard shortcuts, off-peak snooze, and scheduled message creation, cancellation, and delivery after rescheduling. Delivery at the original off-peak boundary and a quit stall observed in testing remain open. See the [Desktop validation record](docs/validation/desktop-v010-2026-11-17.md#2026-11-18--010-候选包复验).
 
 ## 0.1.0-preview.0 — 2026-11-16
 

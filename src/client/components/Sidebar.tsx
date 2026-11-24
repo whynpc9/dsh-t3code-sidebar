@@ -24,7 +24,7 @@ import type { Prefs, Runtime, SearchPage } from '../runtime.ts'
 import { FlatSessionList } from './FlatSessionList.tsx'
 import { AddWorkspaceDialog, RemoveWorkspaceDialog, RenameWorkspaceDialog, ResumeDialog, SnoozeDialog } from './Dialogs.tsx'
 import {
-  cx, GroupRow, SearchResultRow, SessionRow, workspaceMenuIcons, WorkspaceHoverContent,
+  cx, GroupRow, GroupSessionRows, SearchResultRow, workspaceMenuIcons, WorkspaceHoverContent,
   type ContextMenuBindings, type RowEnv,
 } from './Rows.tsx'
 
@@ -141,7 +141,7 @@ function EmptySessions({ archivedOnly, onLeaveArchivedOnly, t }: { archivedOnly:
 
 export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMenu }: SidebarProps) {
   const menu = useContextMenu?.()
-  use(runtime.locale)
+  const locale = use(runtime.locale)
   const t = runtime.t
   const sessions = use(runtime.sessions)
   const workspaces = use(runtime.workspaces)
@@ -151,7 +151,6 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   const snoozeTarget = use(runtime.snoozeRequest)
   const resumeTarget = use(runtime.resumeRequest)
   const notice = use(runtime.notice)
-  const menuTarget = use(runtime.menuTarget)
   const now = useNow(30_000) + backend.clockOffset
   const { groupBy, archivedFilter } = prefs
 
@@ -160,19 +159,23 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   }, [runtime])
 
   const rows = useMemo(
-    () => buildRows({ sessions, workspaces, status, tasks: backend.tasks, lastSeen: prefs.lastSeen, now, hostActivity: hostActivityKnown(backend) }),
-    [sessions, workspaces, status, backend.tasks, prefs.lastSeen, now, backend.kind, backend.status, backend.capabilities.hostActivity],
+    () => wide ? buildRows({ sessions, workspaces, status, tasks: backend.tasks, lastSeen: prefs.lastSeen, now, hostActivity: hostActivityKnown(backend) }) : [],
+    [wide, sessions, workspaces, status, backend.tasks, prefs.lastSeen, now, backend.kind, backend.status, backend.capabilities.hostActivity],
   )
-  const current = rows.find(row => row.current)
+  const current = useMemo(() => rows.find(row => row.current), [rows])
+  // The rail still tracks read markers and the current workspace without building the list.
+  const currentId = useMemo(() => wide ? current?.sessionId : sessions.ids.find(id => {
+    const session = sessions.byId[id]
+    return session?.origin !== 'subagent' && (session?.retainedBy?.mainView ?? 0) > 0
+  }), [wide, current, sessions])
+  const lastTurnSeq = currentId === undefined ? undefined : backend.tasks.get(currentId)?.record.activity.lastTurnEnd?.seq
 
-  // Mark the current session's latest result as read while this window has focus.
+  // Retry unread results on the sidebar clock when the window regains focus.
   useEffect(() => {
-    const seq = current?.facts.summary.lastTurnEnd?.seq
-    if (current === undefined || seq === undefined) return
-    if (typeof document !== 'undefined' && !document.hasFocus()) return
-    if ((prefs.lastSeen[current.sessionId] ?? -1) >= seq) return
-    setPrefs({ lastSeen: { ...prefs.lastSeen, [current.sessionId]: seq } })
-  }, [current, prefs.lastSeen, setPrefs])
+    if (currentId === undefined || lastTurnSeq === undefined || !document.hasFocus()) return
+    if ((prefs.lastSeen[currentId] ?? -1) >= lastTurnSeq) return
+    setPrefs({ lastSeen: { ...prefs.lastSeen, [currentId]: lastTurnSeq } })
+  }, [current, currentId, lastTurnSeq, now, prefs.lastSeen, setPrefs])
 
   // ── Search (native composition: the icon expands into the input) ──
   const [query, setQuery] = useState('')
@@ -263,16 +266,10 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     if (row.native.archived) { runtime.notify(t('toast.archivedNotOpenable')); return }
     runtime.open(row.sessionId)
   }, [runtime, t])
-  const env: RowEnv = {
-    runtime,
-    t,
-    now,
-    ready,
-    statusGrouping: groupBy === 'status',
-    menu,
-    menuSessionId: menuTarget?.kind === 'session' ? (menuTarget.value['sessionId'] as string | undefined) ?? null : null,
-    open,
-  }
+  // The translator is stable across locale changes; hover content also reads the current policy.
+  const env = useMemo<RowEnv>(() => ({
+    runtime, t, now, ready, statusGrouping: groupBy === 'status', menu, open,
+  }), [runtime, t, locale, now, ready, groupBy, menu, open, backend.kind, backend.policy])
 
   // ── Collapse state and the native "show more" watermark ──
   const isCollapsed = (key: string, fallback: boolean): boolean => prefs.collapsed[key] ?? fallback
@@ -288,7 +285,11 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   }
 
   // Native behavior: the workspace holding the current session opens once, unless the user chose otherwise.
-  const currentWorkspaceKey = current === undefined ? undefined : `workspace:${current.workspaceId ?? ''}`
+  const currentWorkspaceKey = useMemo(() => {
+    if (groupBy !== 'workspace' || currentId === undefined) return undefined
+    const owner = wide ? current?.workspaceId : workspaces.items.find(workspace => workspace.sessionIds.includes(currentId))?.workspaceId
+    return `workspace:${owner ?? ''}`
+  }, [groupBy, currentId, wide, current, workspaces])
   useEffect(() => {
     if (groupBy !== 'workspace' || currentWorkspaceKey === undefined) return
     if (runtime.prefs.getSnapshot().collapsed[currentWorkspaceKey] !== undefined) return
@@ -357,7 +358,7 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   const rowKeys: string[] = []
   const required: Record<string, number> = {}
   /** Session rows of one expanded group, capped by its watermark, plus the Show more / Show less control. */
-  const groupBody = (markKey: string, groupRows: readonly Row[], capped: boolean, showPin: boolean): ReactNode[] => {
+  const groupBody = (markKey: string, groupRows: readonly Row[], capped: boolean, showPin: boolean): ReactNode => {
     let visible = groupRows
     let overflow: ReactNode = null
     if (capped) {
@@ -383,12 +384,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
         )
       }
     }
-    const nodes: ReactNode[] = visible.map((row) => {
-      rowKeys.push(`session:${row.sessionId}`)
-      return <SessionRow key={row.sessionId} row={row} env={env} showPin={showPin} />
-    })
-    if (overflow !== null) nodes.push(overflow)
-    return nodes
+    for (const row of visible) rowKeys.push(`session:${row.sessionId}`)
+    return <><GroupSessionRows rows={visible} env={env} showPin={showPin} />{overflow}</>
   }
 
   // Keep raised watermarks monotonic: a row that stops needing attention does not jump out of view.
@@ -400,12 +397,21 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
   const leaveArchivedOnly = () => { setPrefs({ archivedFilter: 'default' }) }
   const archivedOnly = archivedFilter === 'only'
   const emptySessions = <EmptySessions archivedOnly={archivedOnly} onLeaveArchivedOnly={leaveArchivedOnly} t={t} />
-  const oneList = useMemo(() => groupBy === 'flat' ? flatRows(rows, archivedFilter) : [], [groupBy, rows, archivedFilter])
+  const visibleGrouping = wide && normalizedQuery === '' ? groupBy : null
+  const sections = useMemo(
+    () => visibleGrouping === 'status' ? statusSections(rows, archivedFilter, { workingSection: prefs.workingSection }) : null,
+    [visibleGrouping, rows, archivedFilter, prefs.workingSection],
+  )
+  const ungroupedTitle = visibleGrouping === 'workspace' ? t('group.ungrouped') : ''
+  const groups = useMemo(
+    () => visibleGrouping === 'workspace' ? workspaceGroups(rows, workspaces, archivedFilter, ungroupedTitle) : null,
+    [visibleGrouping, rows, workspaces, archivedFilter, ungroupedTitle],
+  )
+  const oneList = useMemo(() => visibleGrouping === 'flat' ? flatRows(rows, archivedFilter) : [], [visibleGrouping, rows, archivedFilter])
 
   let body: ReactNode
   let empty = false
-  if (groupBy === 'status') {
-    const sections = statusSections(rows, archivedFilter, { workingSection: prefs.workingSection })
+  if (sections !== null) {
     empty = sections.length === 0
     body = sections.map((section) => {
       const key = `status:${section.key}`
@@ -417,17 +423,11 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
           <GroupRow rowKey={`group:${key}`} icon={SECTION_ICON[section.key]} title={t(`section.${section.key}` as Key)}
             expanded={!collapsed} count={section.rows.length} active={collapsed && currentRows.length > 0} t={t}
             onToggle={() => { if (!collapsed) dropMark(key); setCollapsed(key, !collapsed) }} />
-          {collapsed
-            ? currentRows.map((row) => {
-              rowKeys.push(`session:${row.sessionId}`)
-              return <SessionRow key={row.sessionId} row={row} env={env} showPin={section.key !== 'pinned'} />
-            })
-            : groupBody(key, section.rows, !UNCAPPED.has(section.key), section.key !== 'pinned')}
+          {groupBody(key, collapsed ? currentRows : section.rows, !collapsed && !UNCAPPED.has(section.key), section.key !== 'pinned')}
         </div>
       )
     })
-  } else if (groupBy === 'workspace') {
-    const groups = workspaceGroups(rows, workspaces, archivedFilter, t('group.ungrouped'))
+  } else if (groups !== null) {
     empty = groups.length === 0
     body = groups.map((group) => {
       const key = `workspace:${group.key}`

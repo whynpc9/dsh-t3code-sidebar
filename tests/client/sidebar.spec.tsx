@@ -3,11 +3,14 @@
  * The sidebar component in a DOM: search races (A07), keyboard navigation
  * (A08) and the native ⌘K / ⌘O requests it consumes.
  */
-import { act } from 'react'
+import { act, Profiler } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { TaskSidebar } from '../../src/client/components/Sidebar.tsx'
-import type { SearchPage } from '../../src/client/runtime.ts'
+import { TaskSidebar, type SidebarProps } from '../../src/client/components/Sidebar.tsx'
+import * as model from '../../src/client/model.ts'
+import { taskView } from './remote-fakes.ts'
+import { createStore } from '../../src/client/store.ts'
+import type { MenuTarget, SearchPage } from '../../src/client/runtime.ts'
 import { fakeRuntime, session, type FakeRuntime } from './runtime-fake.ts'
 
 beforeAll(() => {
@@ -22,9 +25,10 @@ afterEach(() => {
   container?.remove()
   root = null
   container = null
+  vi.restoreAllMocks()
 })
 
-function render(runtime: FakeRuntime, props: { wide?: boolean; expandSidebar?: () => void } = {}): HTMLElement {
+function render(runtime: FakeRuntime, props: Omit<SidebarProps, 'runtime'> = {}): HTMLElement {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -51,6 +55,61 @@ function deferred<T>() {
 const searchInput = (view: HTMLElement) => view.querySelector<HTMLInputElement>('.t3sb-search-input')!
 const resultIds = (view: HTMLElement) => [...view.querySelectorAll('.t3sb-search-row')].map(row => row.getAttribute('data-session-id'))
 const focusedKey = () => (document.activeElement as HTMLElement | null)?.getAttribute('data-row-key') ?? null
+
+describe('session menu updates', () => {
+  it('renders only the old and new targets and still refreshes row labels on locale changes', () => {
+    const menuTarget = createStore<MenuTarget | null>(null)
+    const locale = createStore('en')
+    const runtime = fakeRuntime({
+      sessions: ['a', 'b', 'c'].map(id => session(id)),
+      overrides: { menuTarget, locale, t: key => `${locale.getSnapshot()}-${key}` },
+    })
+    const getTriggerProps = vi.fn(() => ({}))
+    const bindings = { getTriggerProps }
+    const view = render(runtime, { useContextMenu: () => bindings })
+    const updateMenu = (id: string | null) => {
+      getTriggerProps.mockClear()
+      act(() => { menuTarget.set(id === null ? null : { kind: 'session', value: { sessionId: id } }) })
+      return view.querySelector('.t3sb-menu-open')?.getAttribute('data-session-id')
+    }
+    expect(updateMenu('a')).toBe('a')
+    expect(getTriggerProps).toHaveBeenCalledTimes(1)
+    expect(updateMenu('b')).toBe('b')
+    expect(getTriggerProps).toHaveBeenCalledTimes(2)
+    expect(updateMenu(null)).toBeUndefined()
+    expect(getTriggerProps).toHaveBeenCalledTimes(1)
+    act(() => { locale.set('zh') })
+    expect(view.querySelector('[data-session-id="c"] [data-action="more"]')?.getAttribute('aria-label')).toBe('zh-actions.session.aria')
+  })
+})
+
+describe('hidden list views', () => {
+  it('keeps rail read markers and workspace selection without joining or grouping session rows', () => {
+    const build = vi.spyOn(model, 'buildRows')
+    const group = vi.spyOn(model, 'workspaceGroups')
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const task = taskView('s1', 1)
+    const activity = { ...task.record.activity, lastTurnEnd: { seq: 7, at: 100, reason: 'completed' as const } }
+    const runtime = fakeRuntime({
+      sessions: [session('child', { origin: 'subagent', retainedBy: { mainView: 1 } }), session('s1', { retainedBy: { mainView: 1 } })],
+      workspaces: [{ workspaceId: 'ws', title: 'Test', path: '/test', sessionIds: ['s1'] }],
+      backend: { tasks: new Map([['s1', { ...task, record: { ...task.record, activity } }]]) },
+      prefs: { groupBy: 'workspace' },
+    })
+    const view = render(runtime, { wide: false })
+    expect(runtime.prefs.getSnapshot()).toMatchObject({ lastSeen: { s1: 7 }, collapsed: { 'workspace:ws': false } })
+    expect(build).not.toHaveBeenCalled()
+    expect(group).not.toHaveBeenCalled()
+    act(() => { root!.render(<TaskSidebar runtime={runtime} wide />) })
+    expect(view.querySelector('[data-session-id="s1"]')).not.toBeNull()
+    expect(build).toHaveBeenCalledOnce()
+    expect(group).toHaveBeenCalledOnce()
+    group.mockClear()
+    type(searchInput(view), 's1')
+    expect(resultIds(view)).toEqual(['s1'])
+    expect(group).not.toHaveBeenCalled()
+  })
+})
 
 describe('search (A07)', () => {
   it('debounces, aborts the superseded request and drops its late answer', async () => {
@@ -293,6 +352,57 @@ describe('native ⌘K / ⌘O requests', () => {
 })
 
 describe('one-list window (Q02)', () => {
+  it('uses the shared Desktop scroll area for windowing and keyboard navigation', () => {
+    const sessions = Array.from({ length: 5000 }, (_, i) => session(`s${i}`, { updatedAt: 10000 - i }))
+    const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
+    const outer = render(runtime, { wide: false })
+    outer.style.overflowY = 'auto'
+    Object.defineProperty(outer, 'clientHeight', { value: 600 })
+    act(() => { root!.render(<TaskSidebar runtime={runtime} />) })
+
+    const list = outer.querySelector<HTMLElement>('.t3sb-flat-list')!
+    const trackHeight = sessions.length * 34 - 2 + 16
+    Object.defineProperties(list, { scrollHeight: { value: trackHeight }, clientHeight: { value: trackHeight } })
+    vi.spyOn(list, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 120 - outer.scrollTop, 280, trackHeight))
+    act(() => {
+      outer.scrollTop = 3400 + 120
+      outer.dispatchEvent(new Event('scroll'))
+    })
+    const mounted = () => list.querySelectorAll<HTMLElement>('.t3sb-session-row')
+    expect(mounted()[0]?.dataset['sessionId']).toBe('s80')
+    expect(mounted().length).toBeLessThan(65)
+    const row = list.querySelector<HTMLElement>('[data-session-id="s100"]')!
+    act(() => { row.focus(); row.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    expect(focusedKey()).toBe('session:s4999')
+    expect(outer.scrollTop).toBe(120 + 4999 * 34 + 32 - 600)
+    expect(list.scrollTop).toBe(0)
+    expect(mounted().length).toBeLessThan(65)
+  })
+
+  it('skips commits inside the same scroll window and clamps the window when the catalog shrinks', () => {
+    const sessions = Array.from({ length: 250 }, (_, i) => session(`s${i}`, { updatedAt: 1000 - i }))
+    const runtime = fakeRuntime({ sessions, prefs: { groupBy: 'flat' } })
+    const view = render(runtime)
+    const onRender = vi.fn()
+    act(() => { root!.render(<Profiler id="sidebar" onRender={onRender}><TaskSidebar runtime={runtime} /></Profiler>) })
+    const list = view.querySelector<HTMLElement>('.t3sb-flat-list')!
+    Object.defineProperty(list, 'clientHeight', { value: 680 })
+    const scroll = (top: number) => act(() => {
+      list.scrollTop = top
+      list.dispatchEvent(new Event('scroll'))
+    })
+    scroll(3401)
+    onRender.mockClear()
+    scroll(3402)
+    expect(onRender).not.toHaveBeenCalled()
+    scroll(3436)
+    expect(onRender).toHaveBeenCalled()
+    expect(list.querySelector('[data-flat-index="80"]')).toBeNull()
+    expect(list.querySelector('[data-flat-index="141"]')).not.toBeNull()
+    act(() => { runtime.sessionsStore.set({ ...runtime.sessions.getSnapshot(), ids: ['s0', 's1'] }) })
+    expect([...list.querySelectorAll('.t3sb-session-row')].map(row => row.getAttribute('data-session-id'))).toEqual(['s0', 's1'])
+  })
+
   it('replaces the rendered rows as the viewport moves and reaches both ends with the keyboard', () => {
     const now = Date.now()
     const sessions = Array.from({ length: 5000 }, (_, i) => session(`s${i}`, { updatedAt: now - i * 1000 }))

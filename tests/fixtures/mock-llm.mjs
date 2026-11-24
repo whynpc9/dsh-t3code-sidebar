@@ -60,7 +60,9 @@ const server = createServer((req, res) => {
   let raw = ''
   req.on('data', chunk => { raw += chunk })
   req.on('end', async () => {
-    if (!req.url?.endsWith('/messages')) {
+    // Anthropic SDK clients may add query parameters to the Messages URL.
+    const path = req.url?.split('?', 1)[0]
+    if (!path?.endsWith('/messages')) {
       res.writeHead(404).end()
       return
     }
