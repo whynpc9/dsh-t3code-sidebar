@@ -116,6 +116,9 @@ try {
   record('H03.user-text', user.some(hit => hit.id === plain && hit.mark?.toLowerCase() === 'zebra-needle'), JSON.stringify(user))
   const cjk = await search(page, '中文')
   record('H04.cjk-two-chars', cjk.some(hit => hit.id === plain && hit.mark === '中文'), JSON.stringify(cjk))
+  // Traditional characters find the simplified text the session holds.
+  const variant = await search(page, '測試')
+  record('H04b.traditional-finds-simplified', variant.some(hit => hit.id === plain && hit.mark === '测试'), JSON.stringify(variant))
   const reply = await search(page, 'fixture reply')
   record('H05.assistant-text', reply.some(hit => hit.id === plain && hit.mark?.toLowerCase() === 'fixture reply'), JSON.stringify(reply))
   // The tool call's command and its result are never indexed.

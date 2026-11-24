@@ -146,6 +146,17 @@ describe('search (A07)', () => {
     expect(search).toHaveBeenCalledTimes(1)
   })
 
+  it('history search: says when older sessions exceed the Host budget, and does not ask again', async () => {
+    const search = vi.fn(async () => ({ items: [], hasMore: false, indexing: { indexed: 4, total: 9, limited: true } }))
+    const runtime = fakeRuntime({ sessions: [session('s1')], prefs: { historySearch: true }, overrides: { search } })
+    const view = render(runtime)
+    type(searchInput(view), 'needle')
+    await wait(300)
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')?.textContent).toBe('search.limited(indexed=4,total=9)')
+    await wait(1600)
+    expect(search).toHaveBeenCalledTimes(1)
+  })
+
   it('a late answer for a cleared query never brings results back', async () => {
     const reply = deferred<SearchPage>()
     const runtime = fakeRuntime({ sessions: [session('s1')], overrides: { search: vi.fn(() => reply.promise) } })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { foldQuery, foldText, latestMatch, MAX_DOC_CHARS, projectEvent, snippetAround, type HistoryEvent } from '../../src/domain/history-text.ts'
+import { foldQuery, foldText, MAX_DOC_CHARS, projectEvent, SessionText, snippetAround, type HistoryEvent } from '../../src/domain/history-text.ts'
 
 const user = (text: string, seq = 1, extra: Record<string, unknown> = {}): HistoryEvent => ({
   type: 'user/message', seq, time: 1000 + seq, surfaceOp: 'append',
@@ -21,6 +21,16 @@ describe('foldText', () => {
     expect(foldText('İx')).toBe('İx')
     // Accents and CJK are kept.
     expect(foldText('Été 中文')).toBe('été 中文')
+  })
+
+  it('folds traditional Chinese characters to simplified, so either form finds the other', () => {
+    expect(foldText('資料庫遷移後發佈')).toBe('资料库迁移后发布')
+    expect(foldText('资料库迁移后发布')).toBe('资料库迁移后发布')
+    expect(foldQuery('遷移')).toBe(foldText('迁移'))
+    // Non-Han letters beyond the BMP still lowercase (Deseret).
+    expect(foldText('\u{10400}')).toBe('\u{10428}')
+    // Hangul and kana are untouched.
+    expect(foldText('한국어 かな')).toBe('한국어 かな')
   })
 
   it('returns the same string when nothing changes', () => {
@@ -69,18 +79,36 @@ describe('projectEvent', () => {
   })
 })
 
-describe('latestMatch and snippetAround', () => {
-  const docs = [user('alpha 中文 one', 1), user('beta two', 2), user('Alpha three', 3)].flatMap(projectEvent)
+describe('SessionText and snippetAround', () => {
+  const packed = (events: HistoryEvent[]) => {
+    const body = new SessionText()
+    for (const doc of events.flatMap(projectEvent)) body.add(doc)
+    return body
+  }
+  const body = packed([user('alpha 中文 one', 1), user('beta two', 2), user('Alpha three', 3)])
 
   it('finds the newest document containing the literal folded query', () => {
-    expect(latestMatch(docs, 'alpha')?.doc.seq).toBe(3)
-    expect(latestMatch(docs, '中')?.doc.seq).toBe(1)
+    expect(body.latest('alpha')).toEqual({ seq: 3, at: 1003, role: 'user', text: 'Alpha three', index: 0 })
+    expect(body.latest('中')).toMatchObject({ seq: 1, text: 'alpha 中文 one', index: 6 })
+    expect(body.latest('two')).toMatchObject({ seq: 2, text: 'beta two', index: 5 })
     // A match never spans two messages.
-    expect(latestMatch(docs, 'one beta')).toBeNull()
-    expect(latestMatch(docs, '')).toBeNull()
+    expect(body.latest('one beta')).toBeNull()
+    expect(body.latest('one\0beta')).toBeNull()
+    expect(body.latest('')).toBeNull()
     // Literal: no query syntax, no wildcards.
-    expect(latestMatch(projectEvent(user('100% done_ok "x"')), '% done_')).not.toBeNull()
-    expect(latestMatch(docs, 'alpha OR beta')).toBeNull()
+    expect(packed([user('100% done_ok "x"')]).latest('% done_')).not.toBeNull()
+    expect(body.latest('alpha or beta')).toBeNull()
+    expect(body.documents).toBe(3)
+  })
+
+  it('keeps one copy while nothing folds differently, and both once something does', () => {
+    const plain = packed([user('lower case only', 1), assistant([{ type: 'text', text: '中文' }], 2)])
+    expect(plain.units).toBe('lower case only\0中文'.length)
+    expect(plain.latest('中文')).toMatchObject({ role: 'assistant', seq: 2 })
+    plain.add(projectEvent(user('Upper', 3))[0]!)
+    expect(plain.units).toBe(2 * 'lower case only\0中文\0Upper'.length)
+    expect(plain.latest('upper')).toMatchObject({ text: 'Upper', index: 0 })
+    expect(plain.latest('case')).toMatchObject({ text: 'lower case only', index: 6 })
   })
 
   it('marks the match in a one-line excerpt', () => {

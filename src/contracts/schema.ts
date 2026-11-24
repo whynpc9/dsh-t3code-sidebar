@@ -280,6 +280,8 @@ export const HistorySearchResultSchema = z.discriminatedUnion('ok', [
     hasMore: z.boolean(),
     /** Every stored session was read; false while indexing or after a failed read. */
     complete: z.boolean(),
+    /** Older sessions were left out to stay within the Host's memory budget (absent from earlier Hosts). */
+    limited: z.boolean().default(false),
     progress: z.object({ indexed: z.number(), total: z.number() }).nullable(),
   }),
   z.object({

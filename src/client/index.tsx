@@ -236,7 +236,7 @@ export function apply(rawCtx: Context): void {
           return {
             items: history.hits.map(hit => ({ sessionId: hit.sessionId, snippet: hit.snippet, highlight: hit.highlight })),
             hasMore: history.hasMore,
-            indexing: history.complete ? undefined : history.progress ?? { indexed: 0, total: 0 },
+            indexing: history.complete ? undefined : { ...history.progress ?? { indexed: 0, total: 0 }, limited: history.limited },
           }
         }
       }

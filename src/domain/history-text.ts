@@ -7,10 +7,12 @@
  *   and results, injected context, compaction replacements and unknown blocks
  *   contribute nothing (fail closed).
  * - Matching: a query is one literal substring of one document, compared after
- *   `foldText` (case, full-width ASCII, whitespace). No query syntax.
+ *   `foldText` (case, full-width ASCII, whitespace, traditional → simplified
+ *   Chinese characters). No query syntax.
  * - Folding keeps UTF-16 positions, so a match in folded text is the same range
  *   of the original text.
  */
+import { SIMPLIFIED, TRADITIONAL } from './chinese-variants.ts'
 
 export type HistoryRole = 'user' | 'assistant'
 
@@ -32,20 +34,35 @@ export interface HistoryEvent {
   readonly surfaceOp?: unknown
 }
 
-/** Text kept per document; the rest of a very long block is not searchable. */
-export const MAX_DOC_CHARS = 64 * 1024
+/**
+ * Safety bound per document (a pasted log, not a message anyone wrote); the
+ * rest of such a block is not searchable.
+ */
+export const MAX_DOC_CHARS = 4 * 1024 * 1024
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const ASCII = /^[\x00-\x7F]*$/
-const ASCII_SPACE = /[\t\n\v\f\r]/g
+const ASCII_SPACE = /[\t\n\v\f\r\0]/g
+
+let variants: Map<string, string> | undefined
+/** Traditional → simplified, one BMP character each (built on first use). */
+function simplified(char: string): string {
+  if (variants === undefined) {
+    variants = new Map()
+    for (let i = 0; i < TRADITIONAL.length; i++) variants.set(TRADITIONAL[i] as string, SIMPLIFIED[i] as string)
+  }
+  return variants.get(char) ?? char
+}
 
 /**
- * Case- and width-insensitive form of `text` with the same UTF-16 length and
- * positions: lowercase (locale independent) where that keeps a character's
- * length, full-width ASCII and the ideographic space to ASCII, every
- * whitespace character to a space. No NFKC, no accent stripping.
+ * Case-, width- and script-insensitive form of `text` with the same UTF-16
+ * length and positions: lowercase (locale independent) where that keeps a
+ * character's length, full-width ASCII and the ideographic space to ASCII,
+ * every whitespace character (and NUL) to a space, traditional Chinese
+ * characters to simplified (OpenCC character table, first candidate). No
+ * NFKC, no accent stripping, no phrase-level conversion.
  */
 export function foldText(text: string): string {
   if (ASCII.test(text)) {
@@ -57,11 +74,16 @@ export function foldText(text: string): string {
     const code = char.codePointAt(0) as number
     if (code >= 0xFF01 && code <= 0xFF5E) {
       out += String.fromCharCode(code - 0xFEE0).toLowerCase()
-    } else if (/\s/.test(char)) {
+    } else if (code === 0 || /\s/.test(char)) {
       out += char.length === 1 ? ' ' : char
     } else {
-      const lower = char.toLowerCase()
-      out += lower.length === char.length ? lower : char
+      const variant = code >= 0x3400 ? simplified(char) : char
+      if (variant !== char) {
+        out += variant
+      } else {
+        const lower = char.toLowerCase()
+        out += lower.length === char.length ? lower : char
+      }
     }
   }
   return out === text ? text : out
@@ -120,22 +142,6 @@ export function projectEvent(event: HistoryEvent): HistoryDoc[] {
   return textBlocks(content).map(text => ({ seq: event.seq, at: event.time, role, text, folded: foldText(text) }))
 }
 
-export interface DocMatch {
-  readonly doc: HistoryDoc
-  readonly index: number
-}
-
-/** The newest document containing `foldedQuery` (documents in log order), or null. */
-export function latestMatch(docs: readonly HistoryDoc[], foldedQuery: string): DocMatch | null {
-  if (foldedQuery === '') return null
-  for (let i = docs.length - 1; i >= 0; i--) {
-    const doc = docs[i] as HistoryDoc
-    const index = doc.folded.indexOf(foldedQuery)
-    if (index >= 0) return { doc, index }
-  }
-  return null
-}
-
 export interface Snippet {
   readonly text: string
   /** UTF-16 half-open range of the match inside `text`. */
@@ -165,4 +171,71 @@ export function snippetAround(text: string, index: number, length: number): Snip
   if (end === text.length) after = after.trimEnd()
   else after = `${after.trimEnd()}…`
   return { text: before + match + after, highlight: [before.length, before.length + match.length] }
+}
+
+export interface TextMatch {
+  readonly seq: number
+  readonly at: number
+  readonly role: HistoryRole
+  /** The matching document's original text. */
+  readonly text: string
+  /** Match position inside `text`. */
+  readonly index: number
+}
+
+const SEPARATOR = '\0'
+
+/**
+ * One session's documents packed for memory and scan speed: the texts joined
+ * into one string (NUL-separated; folded text and queries never contain NUL,
+ * so a match cannot span two documents), with per-document offsets, seqs,
+ * times and roles in flat arrays. The folded copy exists only once some
+ * document folds differently.
+ */
+export class SessionText {
+  private text = ''
+  private folded: string | null = null
+  private readonly starts: number[] = []
+  private readonly seqs: number[] = []
+  private readonly ats: number[] = []
+  private roles = ''
+
+  get documents(): number { return this.starts.length }
+  /** UTF-16 units held, both copies included. */
+  get units(): number { return this.text.length + (this.folded?.length ?? 0) }
+
+  add(doc: HistoryDoc): void {
+    const lead = this.starts.length === 0 ? '' : SEPARATOR
+    const start = this.text.length + lead.length
+    if (this.folded === null && doc.folded !== doc.text) this.folded = this.text
+    if (this.folded !== null) this.folded += lead + doc.folded
+    this.text += lead + doc.text
+    this.starts.push(start)
+    this.seqs.push(doc.seq)
+    this.ats.push(doc.at)
+    this.roles += doc.role === 'user' ? 'u' : 'a'
+  }
+
+  /** The newest document containing `foldedQuery`, or null. */
+  latest(foldedQuery: string): TextMatch | null {
+    if (foldedQuery === '' || foldedQuery.includes(SEPARATOR)) return null
+    const position = (this.folded ?? this.text).lastIndexOf(foldedQuery)
+    if (position < 0) return null
+    let low = 0
+    let high = this.starts.length - 1
+    while (low < high) {
+      const mid = (low + high + 1) >> 1
+      if ((this.starts[mid] as number) <= position) low = mid
+      else high = mid - 1
+    }
+    const start = this.starts[low] as number
+    const end = low + 1 < this.starts.length ? (this.starts[low + 1] as number) - SEPARATOR.length : this.text.length
+    return {
+      seq: this.seqs[low] as number,
+      at: this.ats[low] as number,
+      role: this.roles[low] === 'u' ? 'user' : 'assistant',
+      text: this.text.slice(start, end),
+      index: position - start,
+    }
+  }
 }

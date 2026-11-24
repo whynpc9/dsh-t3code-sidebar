@@ -90,7 +90,12 @@ export interface SearchPage {
    * History search only: the Host is still reading sessions (or could not
    * read some), so an empty page is not "no matches". Absent: complete.
    */
-  readonly indexing?: { readonly indexed: number; readonly total: number } | undefined
+  readonly indexing?: {
+    readonly indexed: number
+    readonly total: number
+    /** The Host left older sessions out (memory budget): asking again will not change that. */
+    readonly limited?: boolean | undefined
+  } | undefined
 }
 
 export interface Transition {

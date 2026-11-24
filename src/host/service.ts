@@ -411,6 +411,7 @@ export class T3SidebarService extends TypertRemoteService {
       hits: result.hits.map(hit => ({ ...hit, highlight: [hit.highlight[0], hit.highlight[1]] })),
       hasMore: result.hasMore,
       complete: result.complete,
+      limited: result.limited,
       progress: result.progress,
     }
   }
