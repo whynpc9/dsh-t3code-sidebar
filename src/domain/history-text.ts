@@ -216,6 +216,44 @@ export class SessionText {
     this.roles += doc.role === 'user' ? 'u' : 'a'
   }
 
+  /**
+   * Keep only the newest documents that fit in `maxUnits` (both copies and
+   * separators counted). Returns whether any document was dropped.
+   */
+  keepNewest(maxUnits: number): boolean {
+    if (this.units <= maxUnits) return false
+    const count = this.starts.length
+    const copies = this.folded === null ? 1 : 2
+    let used = 0
+    let first = count
+    while (first > 0) {
+      const index = first - 1
+      const end = index + 1 < count ? (this.starts[index + 1] as number) - SEPARATOR.length : this.text.length
+      const cost = (end - (this.starts[index] as number) + SEPARATOR.length) * copies
+      if (used + cost > maxUnits) break
+      used += cost
+      first = index
+    }
+    const kept: HistoryDoc[] = []
+    for (let index = first; index < count; index++) {
+      const start = this.starts[index] as number
+      const end = index + 1 < count ? (this.starts[index + 1] as number) - SEPARATOR.length : this.text.length
+      const text = this.text.slice(start, end)
+      kept.push({
+        seq: this.seqs[index] as number, at: this.ats[index] as number, role: this.roles[index] === 'u' ? 'user' : 'assistant',
+        text, folded: this.folded === null ? text : this.folded.slice(start, end),
+      })
+    }
+    this.text = ''
+    this.folded = null
+    this.starts.length = 0
+    this.seqs.length = 0
+    this.ats.length = 0
+    this.roles = ''
+    for (const doc of kept) this.add(doc)
+    return true
+  }
+
   /** The newest document containing `foldedQuery`, or null. */
   latest(foldedQuery: string): TextMatch | null {
     if (foldedQuery === '' || foldedQuery.includes(SEPARATOR)) return null

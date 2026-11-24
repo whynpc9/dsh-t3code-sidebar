@@ -93,8 +93,10 @@ export interface SearchPage {
   readonly indexing?: {
     readonly indexed: number
     readonly total: number
-    /** The Host left older sessions out (memory budget): asking again will not change that. */
+    /** The Host left older sessions or messages out (memory budget). */
     readonly limited?: boolean | undefined
+    /** The Host is still listing or reading sessions: asking again can find more. */
+    readonly reading?: boolean | undefined
   } | undefined
 }
 

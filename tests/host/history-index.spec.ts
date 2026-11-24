@@ -217,16 +217,72 @@ describe('HistoryIndex', () => {
     for (let i = 0; i < 10; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, `needle ${'x'.repeat(95)}`)] })
     let now = 0
     const fake = fakeSource(sessions)
-    const index = create(fake.source, { maxUnits: 350, refreshMs: 10, now: () => now })
+    const index = create(fake.source, { maxUnits: 350, refreshMs: 10, concurrency: 1, now: () => now })
     const result = await index.search('needle', 50, signal())
-    // Each session holds 102 units (no folded copy): three fit before the budget is reached, then a fourth tips it.
-    expect(result).toMatchObject({ complete: false, limited: true, progress: { indexed: 4, total: 10 } })
-    expect(result.hits.map(hit => hit.sessionId).sort()).toEqual(['s6', 's7', 's8', 's9'])
-    expect(index.stats().units).toBe(4 * 102)
-    // Deleting indexed sessions frees budget for the next newest.
+    // Each session holds 102 units (no folded copy): three fit; the fourth is cut and nothing older is read.
+    expect(result).toMatchObject({ complete: false, limited: true, reading: false, progress: { indexed: 3, total: 10 } })
+    expect(result.hits.map(hit => hit.sessionId).sort()).toEqual(['s7', 's8', 's9'])
+    expect(index.stats().units).toBe(3 * 102)
+    expect(fake.reads.map(read => read.id)).toEqual(['s9', 's8', 's7', 's6'])
+    // Deleting held sessions frees budget for the next newest.
     for (const id of ['s9', 's8']) sessions.delete(id)
     now = 100
-    expect((await index.search('needle', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s4', 's5', 's6', 's7'])
+    expect((await index.search('needle', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s5', 's6', 's7'])
+    expect(index.stats().units).toBeLessThanOrEqual(350)
+  })
+
+  it('makes room for a session created after the budget was reached', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 4; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, `old ${'x'.repeat(98)}`)] })
+    let now = 10
+    const index = create(fakeSource(sessions).source, { maxUnits: 350, refreshMs: 10, now: () => now })
+    expect((await index.search('old', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s1', 's2', 's3'])
+    // A new session appears live, then in the listing.
+    index.observe('fresh', message(0, 'x'))
+    sessions.set('fresh', { createdAt: 20, token: 't', events: [message(0, `fresh needle ${'x'.repeat(89)}`)] })
+    now = 100
+    const result = await index.search('fresh needle', 50, signal())
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['fresh'])
+    // The oldest held session gave way.
+    expect((await index.search('old', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s2', 's3'])
+    expect(index.stats().units).toBeLessThanOrEqual(350)
+  })
+
+  it('bounds a single session larger than the budget, including live growth, keeping its newest messages', async () => {
+    const events = Array.from({ length: 100 }, (_, i) => message(i, `m${String(i).padStart(3, '0')} ${'x'.repeat(995)}`))
+    const sessions = new Map<string, FakeSession>([
+      ['big', { createdAt: 1, token: 't', events }],
+      ['small', { createdAt: 0, token: 't', events: [message(0, 'tiny')] }],
+    ])
+    const index = create(fakeSource(sessions).source, { maxUnits: 5000, concurrency: 1 })
+    const result = await index.search('m099', 50, signal())
+    expect(result).toMatchObject({ complete: false, limited: true, reading: false })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['big'])
+    expect((await index.search('m000', 50, signal())).hits).toEqual([])
+    // The older, smaller session was not read once the budget was spent.
+    expect((await index.search('tiny', 50, signal())).hits).toEqual([])
+    expect(index.stats().units).toBeLessThanOrEqual(5000)
+    // Live growth stays within the budget too, dropping the oldest messages kept.
+    index.observe('big', message(100, `m100 ${'x'.repeat(995)}`))
+    expect(index.stats().units).toBeLessThanOrEqual(5000)
+    expect((await index.search('m100', 50, signal())).hits).toHaveLength(1)
+    expect((await index.search('m095', 50, signal())).hits).toEqual([])
+  })
+
+  it('says reading only while sessions are still to be listed or read', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }],
+      ['b', { createdAt: 2, token: 't', events: [], fail: true }],
+    ])
+    const fake = fakeSource(sessions)
+    const release = fake.holdList()
+    const index = create(fake.source, { waitMs: 10 })
+    // The first listing is slow: nothing listed yet, but asking again will help.
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: false, reading: true, progress: { indexed: 0, total: 0 } })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // A log that cannot be read is not "still reading".
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: false, reading: false, limited: false, progress: { indexed: 1, total: 2 } })
   })
 
   it('stops on abort and frees memory when idle', async () => {

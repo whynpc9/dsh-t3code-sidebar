@@ -224,8 +224,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
       runtime.search(normalizedQuery, controller.signal).then((page) => {
         if (controller.signal.aborted) return
         setRemote({ query: normalizedQuery, status: 'ready', items: page.items, hasMore: page.hasMore, indexing: page.indexing })
-        // Sessions are still being read: ask again. Only unreadable or budget-limited sessions left: stop.
-        if (page.indexing !== undefined && page.indexing.limited !== true && page.indexing.indexed < page.indexing.total) timer = window.setTimeout(run, INDEXING_POLL_MS)
+        // Ask again only while the Host is still listing or reading sessions.
+        if (page.indexing?.reading === true) timer = window.setTimeout(run, INDEXING_POLL_MS)
       }, () => {
         if (!controller.signal.aborted) setRemote({ query: normalizedQuery, status: 'error', items: [], hasMore: false })
       })
@@ -486,11 +486,11 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
           {!pending && results.length === 0 && indexing === undefined && <div className="t3sb-empty">{t('search.noMatches')}</div>}
           {!pending && indexing !== undefined && (
             <div className="t3sb-search-status" role="status" data-testid="t3-search-indexing">
-              {indexing.limited === true
-                ? t('search.limited', { indexed: indexing.indexed, total: indexing.total })
-                : indexing.indexed < indexing.total
+              {indexing.reading === true
+                ? indexing.total > 0
                   ? t('search.indexing', { indexed: indexing.indexed, total: indexing.total })
-                  : t('search.partial')}
+                  : t('search.listing')
+                : indexing.limited === true ? t('search.limited') : t('search.partial')}
             </div>
           )}
           {(currentRemote.hasMore || truncated) && <div className="t3sb-search-status">{t('search.hasMore', { n: runtime.searchLimit })}</div>}

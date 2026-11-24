@@ -412,6 +412,7 @@ export class T3SidebarService extends TypertRemoteService {
       hasMore: result.hasMore,
       complete: result.complete,
       limited: result.limited,
+      reading: result.reading,
       progress: result.progress,
     }
   }

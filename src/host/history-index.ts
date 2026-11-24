@@ -12,13 +12,15 @@
  *   only the events after the last one indexed, starting one event early: if
  *   that event is not the one indexed last (a rewritten or shorter log), the
  *   whole log is read again. A periodic full read covers rewrites further back.
- * - Bounded: sessions are read newest first, and once the text held reaches
- *   `maxUnits` older sessions are left out; results then say `limited`.
+ * - Bounded: the text held never exceeds `maxUnits`. Sessions are read newest
+ *   first; past the budget the oldest-created sessions give way (a session
+ *   created later, or growing live, evicts them), and a single session larger
+ *   than the budget keeps only its newest messages. Results then say `limited`.
  * - Exact: a search scans every indexed document (no candidate window), so
  *   short and CJK queries and the oldest history are found once indexed.
  * - Honest: while sessions are still being read, or a read failed, results
  *   carry `complete: false` and the progress so the Client never presents a
- *   partial scan as "no matches".
+ *   partial scan as "no matches"; `reading` says whether asking again can help.
  */
 import { foldQuery, projectEvent, SessionText, snippetAround, type HistoryEvent, type HistoryRole } from '../domain/history-text.ts'
 
@@ -46,8 +48,10 @@ export interface HistoryResult {
   readonly hasMore: boolean
   /** Every listed session was read and the listing is current. */
   readonly complete: boolean
-  /** Older sessions were left out to stay within the memory budget. */
+  /** Older sessions or messages were left out to stay within the memory budget. */
   readonly limited: boolean
+  /** Sessions are still to be listed or read: asking again can find more. */
+  readonly reading: boolean
   /** Sessions read so far / listed; null once complete. */
   readonly progress: { readonly indexed: number; readonly total: number } | null
 }
@@ -82,6 +86,8 @@ export interface HistoryIndexOptions {
 }
 
 interface Entry {
+  /** Header creation time; the budget gives way oldest first. */
+  createdAt: number
   token: string | undefined
   /** Events consumed from the log (the next read offset). */
   offset: number
@@ -93,14 +99,20 @@ interface Entry {
   /** Read at least once; live events alone do not make an entry indexed. */
   indexed: boolean
   failed: boolean
-  /** Not read: the budget was spent on newer sessions. */
+  /** Not held: the budget was spent on newer sessions. */
   limited: boolean
+  /** Held, but only its newest messages (larger than the budget alone). */
+  trimmed: boolean
 }
 
 const eventKey = (event: HistoryEvent): string => `${event.seq}|${event.type}|${event.time}`
-const emptyEntry = (): Entry => ({
-  token: undefined, offset: 0, lastSeq: -1, lastKey: '', fullAt: 0, body: new SessionText(), indexed: false, failed: false, limited: false,
+const emptyEntry = (createdAt: number): Entry => ({
+  createdAt, token: undefined, offset: 0, lastSeq: -1, lastKey: '', fullAt: 0, body: new SessionText(),
+  indexed: false, failed: false, limited: false, trimmed: false,
 })
+/** Whether `left` gives way before `right` (older first; id breaks ties). */
+const yieldsTo = (left: [string, Entry], right: [string, Entry]): boolean =>
+  left[1].createdAt < right[1].createdAt || (left[1].createdAt === right[1].createdAt && left[0] < right[0])
 
 /** Default budget: about 180 MB of heap, roughly 250,000 messages of a few hundred characters (measured). */
 export const DEFAULT_MAX_UNITS = 128 * 1024 * 1024
@@ -176,12 +188,14 @@ export class HistoryIndex {
     hits.sort((left, right) => right.at - left.at || (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0))
     const total = this.entries.size
     let indexed = 0
+    let pending = 0
     let failed = false
     let limited = false
     for (const entry of this.entries.values()) {
       if (entry.indexed) indexed++
+      else if (!entry.failed && !entry.limited) pending++
       if (entry.failed) failed = true
-      if (entry.limited) limited = true
+      if (entry.limited || entry.trimmed) limited = true
     }
     // A routine re-listing in flight does not make a fully indexed result partial.
     const complete = this.listed && indexed === total && !failed && !limited
@@ -190,6 +204,7 @@ export class HistoryIndex {
       hasMore: hits.length > limit,
       complete,
       limited,
+      reading: !this.listed || pending > 0,
       progress: complete ? null : { indexed, total },
     }
   }
@@ -206,14 +221,15 @@ export class HistoryIndex {
     if (this.disposed || !this.listed) return
     const entry = this.entries.get(sessionId)
     if (entry === undefined) {
-      // A new session: list it now so the next refresh reads it in full.
-      this.entries.set(sessionId, emptyEntry())
+      // A new session (the newest): list it now so the next refresh reads it in full.
+      this.entries.set(sessionId, emptyEntry(this.now()))
       return
     }
     if (!entry.indexed || event.seq !== entry.lastSeq + 1) return
     const before = entry.body.units
     for (const doc of projectEvent(event)) entry.body.add(doc)
     this.units += entry.body.units - before
+    this.enforceBudget(sessionId, entry)
     entry.lastSeq = event.seq
     entry.lastKey = eventKey(event)
     entry.offset += 1
@@ -270,33 +286,38 @@ export class HistoryIndex {
     for (const item of [...listing].sort((left, right) => right.createdAt - left.createdAt)) {
       let entry = this.entries.get(item.id)
       if (entry === undefined) {
-        entry = emptyEntry()
+        entry = emptyEntry(item.createdAt)
         this.entries.set(item.id, entry)
       }
+      entry.createdAt = item.createdAt
       const full = !entry.indexed || now - entry.fullAt >= this.fullReadMs
       if (full || entry.failed || item.token === undefined || item.token !== entry.token) due.push({ id: item.id, token: item.token, full })
     }
     this.listed = true
     this.listedAt = now
     let next = 0
+    // Set once a session had to be cut for the budget: every later (older) one would be too.
+    let budgetSpent = false
     const worker = async (): Promise<void> => {
       while (next < due.length && !signal.aborted) {
         const job = due[next++] as (typeof due)[number]
         const entry = this.entries.get(job.id)
-        // Over budget: keep updating what is indexed, but take on no older session.
-        if (entry !== undefined && !entry.indexed && this.units >= this.maxUnits) {
+        // Over budget: read a session only when an older one can give way to it.
+        if (entry !== undefined && !entry.indexed && (budgetSpent || this.units >= this.maxUnits)
+          && this.oldestHolder([job.id, entry]) === undefined) {
           entry.limited = true
           continue
         }
-        await this.readOne(job.id, job.token, job.full, signal)
+        if (await this.readOne(job.id, job.token, job.full, signal)) budgetSpent = true
       }
     }
     await Promise.all(Array.from({ length: Math.max(1, this.concurrency) }, worker))
   }
 
-  private async readOne(id: string, token: string | undefined, full: boolean, signal: AbortSignal): Promise<void> {
+  /** Read one log into the index; true when the budget made it cut this session itself. */
+  private async readOne(id: string, token: string | undefined, full: boolean, signal: AbortSignal): Promise<boolean> {
     const entry = this.entries.get(id)
-    if (entry === undefined) return
+    if (entry === undefined) return false
     // An incremental read starts at the last event consumed, to confirm the log still continues it.
     const overlap = !full && entry.offset > 0
     const offset = full ? 0 : overlap ? entry.offset - 1 : entry.offset
@@ -308,10 +329,10 @@ export class HistoryIndex {
     } catch {
       events = null
     }
-    if (signal.aborted || this.entries.get(id) !== entry) return
+    if (signal.aborted || this.entries.get(id) !== entry) return false
     if (events === null) {
       entry.failed = true
-      return
+      return false
     }
     if (overlap) {
       const first = events[0]
@@ -345,6 +366,45 @@ export class HistoryIndex {
     entry.indexed = true
     entry.failed = false
     entry.limited = false
+    if (full) entry.trimmed = false
+    return this.enforceBudget(id, entry)
+  }
+
+  /** The oldest session holding text that yields to `than`, if any. */
+  private oldestHolder(than: [string, Entry]): [string, Entry] | undefined {
+    let oldest: [string, Entry] | undefined
+    for (const candidate of this.entries) {
+      if (candidate[1] === than[1] || candidate[1].body.units === 0 || !yieldsTo(candidate, than)) continue
+      if (oldest === undefined || yieldsTo(candidate, oldest)) oldest = candidate
+    }
+    return oldest
+  }
+
+  /**
+   * After `id` grew: evict older sessions, then trim `id` itself, until within
+   * the budget. Returns true when `id` itself had to be cut.
+   */
+  private enforceBudget(id: string, entry: Entry): boolean {
+    while (this.units > this.maxUnits) {
+      const victim = this.oldestHolder([id, entry])
+      if (victim !== undefined) {
+        this.evict(victim[1])
+        continue
+      }
+      // Every other holder is newer: this session keeps only its newest messages that still fit.
+      this.units -= entry.body.units
+      entry.body.keepNewest(Math.max(0, this.maxUnits - this.units))
+      this.units += entry.body.units
+      if (entry.body.documents === 0) this.evict(entry)
+      else entry.trimmed = true
+      return true
+    }
+    return false
+  }
+
+  private evict(entry: Entry): void {
+    this.units -= entry.body.units
+    Object.assign(entry, emptyEntry(entry.createdAt), { limited: true })
   }
 }
 
