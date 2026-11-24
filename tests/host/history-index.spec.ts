@@ -18,9 +18,11 @@ function fakeSource(sessions: Map<string, FakeSession>) {
   const source: HistorySource = {
     async list() {
       lists++
+      // The snapshot is taken when the listing starts, however long it then takes to return.
+      const snapshot = [...sessions].map(([id, session]) => ({ id, createdAt: session.createdAt, token: session.token }))
       if (listGate !== null) await listGate
       if (listFails) throw new Error('listing failed')
-      return [...sessions].map(([id, session]) => ({ id, createdAt: session.createdAt, token: session.token }))
+      return snapshot
     },
     async read(id, offset) {
       reads.push({ id, offset })
@@ -164,8 +166,66 @@ describe('HistoryIndex', () => {
     index.observe('a', message(5, 'skipped words'))
     expect((await index.search('live', 10, signal())).hits).toMatchObject([{ sessionId: 'a', role: 'assistant', seq: 1 }])
     expect((await index.search('skipped', 10, signal())).hits).toEqual([])
+    // A new session is listed and read on the next search, without waiting for `refreshMs`.
+    sessions.set('new', { createdAt: 2, token: 't1', events: [message(0, 'brand new')] })
     index.observe('new', message(0, 'brand new'))
-    expect(await index.search('brand', 10, signal())).toMatchObject({ hits: [], complete: false, progress: { indexed: 1, total: 2 } })
+    const result = await index.search('brand', 10, signal())
+    expect(result).toMatchObject({ complete: true })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['new'])
+  })
+
+  it('keeps live messages that arrive while a full re-read is in flight', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, fullReadMs: 50, refreshWaitMs: 5, now: () => now })
+    await index.search('hello', 10, signal())
+    // A periodic full re-read starts from the log as it is; a message arrives live before it returns.
+    const release = fake.hold()
+    now = 100
+    await index.search('hello', 10, signal())
+    index.observe('a', message(1, 'arrived live'))
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    now = 105
+    expect((await index.search('arrived', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+    // The cursor follows the replayed event, so the next live event is not a gap.
+    index.observe('a', message(2, 'next live'))
+    expect((await index.search('next live', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('keeps a session first seen live while a listing is in flight', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    await index.search('hello', 10, signal())
+    // The listing snapshot is taken before the new session exists.
+    const releaseList = fake.holdList()
+    now = 100
+    await index.search('hello', 10, signal())
+    sessions.set('fresh', { createdAt: 2, token: 't1', events: [message(0, 'fresh words')] })
+    index.observe('fresh', message(0, 'fresh words'))
+    // The held listing returns without 'fresh': it must not be dropped as deleted.
+    releaseList()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect((await index.search('fresh', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['fresh'])
+  })
+
+  it('does not call a result complete when a read commits into an already-scanned entry mid-scan', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 450; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, i === 449 ? 'needle' : 'hay')] })
+    const fake = fakeSource(sessions)
+    const release = fake.hold()
+    const index = create(fake.source, { waitMs: 5 })
+    const searching = index.search('needle', 10, signal())
+    // Fires right after the search's own 5 ms wait: the scan has started (s449 first) and is at its
+    // first yield, so every read commits before it resumes.
+    setTimeout(release, 5)
+    const result = await searching
+    // The scan passed s449 (newest, scanned first) before its read committed.
+    expect(result.hits).toEqual([])
+    expect(result).toMatchObject({ complete: false, reading: true })
   })
 
   it('answers partially while sessions are still being read', async () => {

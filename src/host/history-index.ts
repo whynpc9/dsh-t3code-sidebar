@@ -113,13 +113,17 @@ interface Entry {
   trimmed: boolean
   /** Indexed, but the log changed and the read that catches up has not finished. */
   stale: boolean
+  /** Live events observed while a read of this log is in flight, replayed after it commits. */
+  inflight: HistoryEvent[] | undefined
 }
 
 const eventKey = (event: HistoryEvent): string => `${event.seq}|${event.type}|${event.time}`
 const emptyEntry = (createdAt: number): Entry => ({
   createdAt, token: undefined, offset: 0, lastSeq: -1, lastKey: '', fullAt: 0, body: new SessionText(),
-  indexed: false, failed: false, limited: false, trimmed: false, stale: false,
+  indexed: false, failed: false, limited: false, trimmed: false, stale: false, inflight: undefined,
 })
+/** Live events kept per read in flight; past this the next refresh catches up from the log. */
+const MAX_INFLIGHT_EVENTS = 1_000
 /** Whether `left` gives way before `right` (older first; id breaks ties). */
 const yieldsTo = (left: [string, Entry], right: [string, Entry]): boolean =>
   left[1].createdAt < right[1].createdAt || (left[1].createdAt === right[1].createdAt && left[0] < right[0])
@@ -135,6 +139,8 @@ export class HistoryIndex {
   private listed = false
   private listedAt = 0
   private listing: Promise<void> | undefined
+  /** A session was first seen live since the last listing started: list again on the next search. */
+  private relistDue = false
   /** Why the last listing failed, while nothing has been listed yet. */
   private listError: unknown
   private controller = new AbortController()
@@ -191,6 +197,21 @@ export class HistoryIndex {
       this.listError = undefined
       throw new HistoryUnavailableError(error)
     }
+    // Completeness is taken before the scan: a read that commits while the scan yields may land
+    // in an entry already scanned, so only the state as of the start is known to be covered.
+    const total = this.entries.size
+    let indexed = 0
+    let pending = 0
+    let failed = false
+    let limited = false
+    for (const entry of this.entries.values()) {
+      // A changed log whose catch-up read is still running is not up to date yet.
+      if (entry.indexed && !entry.stale) indexed++
+      else if (entry.stale || (!entry.failed && !entry.limited)) pending++
+      if (entry.failed) failed = true
+      if (entry.limited || entry.trimmed) limited = true
+    }
+    const listed = this.listed
     const hits: HistoryHit[] = []
     let scanned = 0
     for (const [sessionId, entry] of this.entries) {
@@ -204,26 +225,14 @@ export class HistoryIndex {
       hits.push({ sessionId, seq: match.seq, at: match.at, role: match.role, snippet: snippet.text, highlight: snippet.highlight })
     }
     hits.sort((left, right) => right.at - left.at || (left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0))
-    const total = this.entries.size
-    let indexed = 0
-    let pending = 0
-    let failed = false
-    let limited = false
-    for (const entry of this.entries.values()) {
-      // A changed log whose catch-up read is still running is not up to date yet.
-      if (entry.indexed && !entry.stale) indexed++
-      else if (entry.stale || (!entry.failed && !entry.limited)) pending++
-      if (entry.failed) failed = true
-      if (entry.limited || entry.trimmed) limited = true
-    }
     // A routine re-listing in flight does not make a fully indexed result partial.
-    const complete = this.listed && indexed === total && !failed && !limited
+    const complete = listed && indexed === total && !failed && !limited
     return {
       hits: hits.slice(0, limit),
       hasMore: hits.length > limit,
       complete,
       limited,
-      reading: !this.listed || pending > 0,
+      reading: !listed || pending > 0,
       progress: complete ? null : { indexed, total },
     }
   }
@@ -240,10 +249,13 @@ export class HistoryIndex {
     if (this.disposed || !this.listed) return
     const entry = this.entries.get(sessionId)
     if (entry === undefined) {
-      // A new session (the newest): list it now so the next refresh reads it in full.
+      // A new session (the newest): track it, and list again on the next search to read it in full.
       this.entries.set(sessionId, emptyEntry(this.now()))
+      this.relistDue = true
       return
     }
+    // A read in flight may have missed this event: keep it to replay once the read commits.
+    if (entry.inflight !== undefined && entry.inflight.length < MAX_INFLIGHT_EVENTS) entry.inflight.push(event)
     if (!entry.indexed || event.seq !== entry.lastSeq + 1) return
     const before = entry.body.units
     for (const doc of projectEvent(event)) entry.body.add(doc)
@@ -264,6 +276,7 @@ export class HistoryIndex {
     this.listedAt = 0
     this.listing = undefined
     this.listError = undefined
+    this.relistDue = false
     if (this.idleTimer !== undefined) clearTimeout(this.idleTimer)
     this.idleTimer = undefined
   }
@@ -282,7 +295,7 @@ export class HistoryIndex {
   /** Start a listing + read pass when due; returns the pass in flight, if any. */
   private refresh(): Promise<void> | undefined {
     if (this.listing !== undefined) return this.listing
-    if (this.listed && this.now() - this.listedAt < this.refreshMs) return undefined
+    if (this.listed && !this.relistDue && this.now() - this.listedAt < this.refreshMs) return undefined
     const signal = this.controller.signal
     const pass = this.sync(signal).catch((error: unknown) => {
       if (!signal.aborted && !this.listed) this.listError = error
@@ -294,6 +307,9 @@ export class HistoryIndex {
   }
 
   private async sync(signal: AbortSignal): Promise<void> {
+    // Sessions first seen live during the listing are newer than its snapshot: keep them.
+    const known = new Set(this.entries.keys())
+    this.relistDue = false
     const listing = await this.source.list(signal)
     if (signal.aborted) return
     this.listError = undefined
@@ -301,7 +317,7 @@ export class HistoryIndex {
     const present = new Set(listing.map(item => item.id))
     // Absent from a successful listing: deleted (or no longer stored); drop its text.
     for (const [id, entry] of [...this.entries]) {
-      if (present.has(id)) continue
+      if (present.has(id) || !known.has(id)) continue
       this.entries.delete(id)
       this.units -= entry.body.units
     }
@@ -350,11 +366,14 @@ export class HistoryIndex {
     const expectedKey = entry.lastKey
     const readSignal = AbortSignal.any([signal, AbortSignal.timeout(this.readTimeoutMs)])
     let events: readonly HistoryEvent[] | null
+    entry.inflight = []
     try {
       events = await this.source.read(id, offset, readSignal)
     } catch {
       events = null
     }
+    const live = entry.inflight
+    entry.inflight = undefined
     // Aborted, deleted or evicted meanwhile (evicting replaces the entry): commit nothing.
     if (signal.aborted || this.entries.get(id) !== entry) return false
     if (events === null) {
@@ -376,6 +395,19 @@ export class HistoryIndex {
       entry.fullAt = this.now()
       entry.lastSeq = -1
       entry.lastKey = ''
+      const last = events.at(-1)
+      if (last !== undefined) {
+        entry.lastSeq = last.seq
+        entry.lastKey = eventKey(last)
+      }
+      // Live events committed after the read's snapshot: the new body must keep them.
+      for (const event of live) {
+        if (event.seq !== entry.lastSeq + 1) continue
+        for (const doc of projectEvent(event)) body.add(doc)
+        entry.lastSeq = event.seq
+        entry.lastKey = eventKey(event)
+        entry.offset += 1
+      }
     } else {
       // Live events observed meanwhile are already indexed: add only what is new.
       for (const event of events) {
