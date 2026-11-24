@@ -21,8 +21,8 @@ import { z } from 'zod'
 import { NAMESPACE, PROTOCOL_MISMATCH_CODE, REMOTE_SPEC } from '../contracts/remote.ts'
 import {
   PROTOCOL_VERSION,
-  type Capabilities, type CommandAction, type CommandInput, type CommandResult, type FollowEvent, type PolicyPreview, type PolicyResult,
-  type Snapshot, type TaskView,
+  type Capabilities, type CommandAction, type CommandInput, type CommandResult, type FollowEvent, type HistorySearchResult, type PolicyPreview,
+  type PolicyResult, type Snapshot, type TaskView,
 } from '../contracts/schema.ts'
 import { acknowledgeResult, reconcile, reopen, setPolicyOverride, settle, snooze, type Transition } from '../domain/commands.ts'
 import {
@@ -101,6 +101,12 @@ export interface TaskBackend {
   listTransitions(limit: number): Promise<readonly { at: number; sessionId: string; from: string; to: string; reason: string }[]>
   /** Evaluate the stored policy (draft null) or an unsaved draft; null when unavailable. */
   previewPolicy(draft: PolicyDraft | null): Promise<PolicyPreview | null>
+  /**
+   * Opt-in Host history search; null when this backend, the Host (older
+   * version, non-owner caller, no persistence) or the call cannot answer.
+   * Rejects only when `signal` aborted.
+   */
+  searchHistory(query: string, limit: number, signal: AbortSignal): Promise<Extract<HistorySearchResult, { ok: true }> | null>
   dispose(): void
 }
 
@@ -139,6 +145,8 @@ export interface T3Remote {
   setPolicy(input: unknown): Promise<RemoteResult<PolicyResult>>
   listTransitions(limit: number): Promise<RemoteResult<readonly { at: number; sessionId: string; from: string; to: string; reason: string }[]>>
   previewPolicy?(input: unknown): Promise<RemoteResult<PolicyPreview>>
+  /** Absent from the spec of older Clients; an older Host answers it as a missing method. */
+  searchHistory?(input: unknown, signal?: AbortSignal): Promise<RemoteResult<HistorySearchResult>>
 }
 
 /** `ctx.inject` returns a cordis Fiber (disposed with `.dispose()`); older hosts returned a disposer. */
@@ -704,6 +712,20 @@ export class HostBackend implements TaskBackend {
     }
   }
 
+  async searchHistory(query: string, limit: number, signal: AbortSignal): Promise<Extract<HistorySearchResult, { ok: true }> | null> {
+    const api = this.api
+    if (api?.searchHistory === undefined || this.disposed) return null
+    let result: RemoteResult<HistorySearchResult>
+    try {
+      result = await api.searchHistory({ protocolVersion: PROTOCOL_VERSION, query, limit }, signal)
+    } catch {
+      signal.throwIfAborted()
+      return null
+    }
+    signal.throwIfAborted()
+    return result.ok && result.value?.ok === true ? result.value : null
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -859,6 +881,8 @@ export class LocalBackend implements TaskBackend {
   async listTransitions() { return [] }
 
   async previewPolicy(): Promise<PolicyPreview | null> { return null }
+
+  async searchHistory() { return null }
 
   dispose(): void {
     this.disposed = true

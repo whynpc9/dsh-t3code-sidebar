@@ -35,7 +35,8 @@
     "LICENSE",
     "README.md",
     "README.zh.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"
@@ -66,6 +67,7 @@
     "test": "TZ=America/New_York vitest run",
     "pack:check": "node scripts/pack-check.mjs",
     "holidays:update": "node scripts/update-holidays.mjs",
+    "variants:update": "node scripts/update-chinese-variants.mjs",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run pack:check",
     "prepublishOnly": "pnpm run verify"
   },

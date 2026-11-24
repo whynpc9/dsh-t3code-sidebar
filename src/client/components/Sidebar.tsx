@@ -20,7 +20,7 @@ import {
   WATERMARK_BASE, type ArchivedFilter, type ContentHit, type GroupBy, type Row, type SectionKey,
 } from '../model.ts'
 import type { Readable } from '../store.ts'
-import type { Prefs, Runtime } from '../runtime.ts'
+import type { Prefs, Runtime, SearchPage } from '../runtime.ts'
 import { FlatSessionList } from './FlatSessionList.tsx'
 import { AddWorkspaceDialog, RemoveWorkspaceDialog, RenameWorkspaceDialog, ResumeDialog, SnoozeDialog } from './Dialogs.tsx'
 import {
@@ -33,6 +33,8 @@ const use = <T,>(source: Readable<T>): T => useSyncExternalStore(source.subscrib
 /** Column slide length: rail search waits it out before focusing. */
 const EXPAND_SLIDE_MS = 300
 const SEARCH_DEBOUNCE_MS = 250
+/** While the Host is still indexing history, search again this often. */
+const INDEXING_POLL_MS = 1500
 
 const SECTION_ICON: Record<SectionKey, ReactNode> = {
   pinned: <IconPinOutlineRegular />,
@@ -69,6 +71,7 @@ interface RemoteSearch {
   readonly status: 'idle' | 'loading' | 'ready' | 'error'
   readonly items: readonly ContentHit[]
   readonly hasMore: boolean
+  readonly indexing?: SearchPage['indexing']
 }
 
 type WorkspaceDialog = { readonly kind: 'add' } | { readonly kind: 'rename' | 'remove'; readonly workspaceId: string; readonly title: string }
@@ -212,19 +215,24 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     document.addEventListener('click', onClick)
     return () => { document.removeEventListener('click', onClick) }
   })
+  const historySearch = prefs.historySearch
   useEffect(() => {
     if (normalizedQuery === '') { setRemote({ query: '', status: 'idle', items: [], hasMore: false }); return }
     const controller = new AbortController()
     setRemote({ query: normalizedQuery, status: 'loading', items: [], hasMore: false })
-    const timer = window.setTimeout(() => {
+    const run = () => {
       runtime.search(normalizedQuery, controller.signal).then((page) => {
-        if (!controller.signal.aborted) setRemote({ query: normalizedQuery, status: 'ready', items: page.items, hasMore: page.hasMore })
+        if (controller.signal.aborted) return
+        setRemote({ query: normalizedQuery, status: 'ready', items: page.items, hasMore: page.hasMore, indexing: page.indexing })
+        // Ask again only while the Host is still listing or reading sessions.
+        if (page.indexing?.reading === true) timer = window.setTimeout(run, INDEXING_POLL_MS)
       }, () => {
         if (!controller.signal.aborted) setRemote({ query: normalizedQuery, status: 'error', items: [], hasMore: false })
       })
-    }, SEARCH_DEBOUNCE_MS)
+    }
+    let timer = window.setTimeout(run, SEARCH_DEBOUNCE_MS)
     return () => { window.clearTimeout(timer); controller.abort() }
-  }, [normalizedQuery, runtime])
+  }, [normalizedQuery, runtime, historySearch])
   const clearSearch = () => { setQuery(''); changeSearchExpanded(false) }
 
   // ── Dialogs ──
@@ -454,13 +462,14 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
     const currentRemote = remote.query === normalizedQuery ? remote : { query: normalizedQuery, status: 'loading' as const, items: [], hasMore: false }
     const { items: results, truncated } = searchResults(rows, normalizedQuery, currentRemote.items, archivedFilter, runtime.searchLimit)
     const pending = currentRemote.status === 'loading'
+    const indexing = currentRemote.indexing
     return (
       <div className="t3sb-tree-body t3sb-wide">
         <div className="t3sb-list">
           {current !== undefined && !pending && !results.some(result => result.row.sessionId === current.sessionId) && locateNotice}
           <div className="t3sb-search-tree" role="tree" aria-label={t('search.results')}>
             {results.map(result => (
-              <SearchResultRow key={result.row.sessionId} row={result.row} snippet={result.snippet} place={result.place}
+              <SearchResultRow key={result.row.sessionId} row={result.row} snippet={result.snippet} highlight={result.highlight} place={result.place}
                 env={{ ...env, open: (row) => { if (!row.native.archived) clearSearch(); open(row) } }} />
             ))}
           </div>
@@ -474,7 +483,16 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
               ))}
             </div>
           )}
-          {!pending && results.length === 0 && <div className="t3sb-empty">{t('search.noMatches')}</div>}
+          {!pending && results.length === 0 && indexing === undefined && <div className="t3sb-empty">{t('search.noMatches')}</div>}
+          {!pending && indexing !== undefined && (
+            <div className="t3sb-search-status" role="status" data-testid="t3-search-indexing">
+              {indexing.reading === true
+                ? indexing.total > 0
+                  ? t('search.indexing', { indexed: indexing.indexed, total: indexing.total })
+                  : t('search.listing')
+                : indexing.limited === true ? t('search.limited') : t('search.partial')}
+            </div>
+          )}
           {(currentRemote.hasMore || truncated) && <div className="t3sb-search-status">{t('search.hasMore', { n: runtime.searchLimit })}</div>}
         </div>
       </div>
@@ -523,8 +541,8 @@ export function TaskSidebar({ runtime, wide = true, expandSidebar, useContextMen
                   <IconSearchOutlineRegular size={searchExpanded ? 11 : 14} />
                 </button>
               </Tooltip>
-              <input ref={searchInput} className="t3sb-search-input" type="text" placeholder={t('search.placeholder')}
-                aria-label={t('search.placeholder')} value={query} tabIndex={searchExpanded ? 0 : -1}
+              <input ref={searchInput} className="t3sb-search-input" type="text" placeholder={t(historySearch ? 'search.placeholderHistory' : 'search.placeholder')}
+                aria-label={t(historySearch ? 'search.placeholderHistory' : 'search.placeholder')} value={query} tabIndex={searchExpanded ? 0 : -1}
                 onChange={(event) => { setQuery(sanitizeQuery(event.target.value)) }}
                 onKeyDown={(event) => { if (event.key === 'Escape') clearSearch() }} />
               {searchExpanded && (

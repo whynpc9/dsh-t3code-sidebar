@@ -749,6 +749,12 @@
   color: var(--dsw-alias-label-caption);
 }
 
+.t3sb-search-mark {
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
 .t3sb-row-actions {
   flex: none;
   display: none;

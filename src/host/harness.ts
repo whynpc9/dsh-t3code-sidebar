@@ -22,6 +22,8 @@ export interface HostSessionEvent {
   readonly seq: number
   readonly time: number
   readonly data: unknown
+  /** Message events only: `'append'`, or a replacement (compaction) copy. */
+  readonly surfaceOp?: unknown
 }
 
 export interface HostSessionActivity {

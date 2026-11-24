@@ -894,3 +894,45 @@ describe('durablePendingOf', () => {
     expect(durablePendingOf(null)).toEqual({ known: false })
   })
 })
+
+describe('history search', () => {
+  const said = (host: FakeHost, sessionId: string, text: string, source = 'user') =>
+    appendStored(host, sessionId, 'user/message', { role: 'user', source: { kind: source }, content: [{ type: 'text', text }] })
+  const input = (query: string) => ({ protocolVersion: 1, query, limit: 50 })
+
+  it('reads nothing until asked, then searches stored conversations of the owner', async () => {
+    const { host, service } = await boot(undefined, { s1: 'r1', s2: 'r1' })
+    said(host, 's1', 'Please refactor the parser')
+    appendStored(host, 's1', 'assistant/message', { message: { role: 'assistant', content: [{ type: 'reasoning', text: 'hidden thought' }, { type: 'text', text: 'Refactored.' }] } })
+    said(host, 's2', 'unrelated')
+    said(host, 's2', 'injected parser notice', 'file-change')
+    said(host, 'child', 'subagent parser task')
+    host.opened.length = 0
+    expect(service.getSnapshot(1).tasks).toBeDefined()
+    expect(host.opened).toEqual([])
+
+    const result = await service.searchHistory(input('PARSER'))
+    expect(result).toMatchObject({ ok: true, complete: true, progress: null, hasMore: false })
+    expect(result.ok && result.hits.map(hit => [hit.sessionId, hit.role, hit.snippet])).toEqual([['s1', 'user', 'Please refactor the parser']])
+    expect(host.opened).not.toContain('child')
+    expect(await service.searchHistory(input('hidden'))).toMatchObject({ ok: true, hits: [] })
+
+    // A live committed message is searchable at once.
+    const event = said(host, 's2', 'live parser question')
+    ;(host.ctx as unknown as { emit(name: string, ...args: unknown[]): void }).emit('session/event', { id: 's2' }, event)
+    const live = await service.searchHistory(input('parser question'))
+    expect(live.ok && live.hits.map(hit => hit.sessionId)).toEqual(['s2'])
+  })
+
+  it('refuses callers other than the Host owner and invalid input', async () => {
+    const { host, service } = await boot()
+    said(host, 's1', 'private words')
+    const ctx = (service as unknown as { ctx: object }).ctx
+    Object.defineProperty(ctx, 'invocation', { value: { peer: { principal: { kind: 'share-viewer' } } }, configurable: true })
+    expect(await service.searchHistory(input('private'))).toMatchObject({ ok: false, code: 'FORBIDDEN' })
+    delete (ctx as { invocation?: unknown }).invocation
+    expect(await service.searchHistory({ protocolVersion: 2, query: 'x', limit: 1 })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
+    expect(await service.searchHistory({ protocolVersion: 1, query: '', limit: 1 })).toMatchObject({ ok: false, code: 'PROTOCOL_MISMATCH' })
+    expect(await service.searchHistory(input('private'))).toMatchObject({ ok: true, hits: [{ sessionId: 's1' }] })
+  })
+})

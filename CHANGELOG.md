@@ -2,6 +2,12 @@
 
 The release workflow uses npm's `latest` dist-tag for `0.1.0`. `0.1.0-preview.0` was the first public version, published under `preview`; earlier versions were internal alphas (R0) and were never published. The primary verified runtime is Linux Web with `@deepseek-ai/dsh` `0.2.2-rc.1`. See the [support matrix and known limitations](docs/release.md).
 
+## Unreleased
+
+### Added
+
+- **Message history search (optional, off by default).** Turn on **Plugins → dsh-t3code-sidebar → Sidebar → Search message history** and the sidebar search also finds the text of your messages and the agent's replies in every stored session, not only session names, with the match highlighted in the result. The Host reads sessions through read-only handles on the first search (never resuming or starting one), keeps the text in memory only, picks up new messages as they are committed, and releases everything 30 minutes after the last search. Matching is literal within one message and ignores case, full-/half-width forms and traditional/simplified Chinese characters (OpenCC character table), so one- and two-character Chinese queries and the oldest sessions are found too; while sessions are still being read the sidebar says so instead of “No matching sessions”. Sessions are read newest first, and the text kept is capped (about 180 MB of Host memory, roughly 250,000 messages of a few hundred characters): beyond it the oldest-created sessions give way to newer ones (a single larger session keeps its newest messages), and the sidebar says older messages were not searched. On a 5,000-session profile the first search after a Host start reads everything in about 70 seconds while showing results as they come; later searches answer in tens of milliseconds. Reasoning, tool calls and results, injected context and compaction summaries are never indexed. Only the Host owner can use it; otherwise, and on older Hosts or the browser-only preview, the built-in search is used. The choice is stored per browser (#13).
+
 ## 0.1.0 — 2026-11-18
 
 First stable release. Install with `dsh plugin --profile <profile> add dsh-t3code-sidebar@0.1.0` (or `@latest` for the current stable version).

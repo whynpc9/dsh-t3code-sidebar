@@ -12,6 +12,7 @@ A T3 Code-style task sidebar for DeepSeek Harness. It preserves the native Works
 - **Task sections**: Pinned, Active, Snoozed, and Settled; empty sections stay hidden. An optional **Working** section (off by default) folds running sessions out of Active; they return to Active when they need you.
 - **Off-peak choices**: hide a session with **Until off-peak**, or explicitly choose **Resume at off-peak…** to have the Harness send an editable message into a known-idle session when half-price hours begin. Off-peak actions are on by default.
 - **Task organization**: Snooze, manual settling, result acknowledgement, and automatic settling after 7 days of inactivity by default.
+- **Message history search** (optional, off by default): search also finds text from your messages and the agent's replies in every stored session, with the match highlighted. The Host reads sessions on the first search and keeps the text in memory only.
 - **Flexible policies**: disable automatic settling or set a window of 1–90 days, with workspace overrides and per-session exemptions.
 - **Native experience**: session menus, workspace management, English and Chinese, light and dark themes, and the narrow Harness rail.
 
@@ -36,7 +37,7 @@ See the [release notes](docs/release.md) for upgrades, rollback, local tarball i
 
 - Use **View options** in the sidebar to change grouping and archive filters. On macOS, press `⌘K` to search and `⌘O` to add a workspace.
 - Use a session's **… menu** to snooze, settle, acknowledge a result, or exempt it from automatic settling. Archiving remains a native menu action.
-- Open **Plugins → dsh-t3code-sidebar** to manage the Working section and **Off-peak snooze**, configure automatic settling and workspace policies, preview their effects, and review recent changes. **View options → Sidebar settings…** in the sidebar opens the same page.
+- Open **Plugins → dsh-t3code-sidebar** to manage the Working section, **Off-peak snooze** and **Search message history**, configure automatic settling and workspace policies, preview their effects, and review recent changes. **View options → Sidebar settings…** in the sidebar opens the same page.
 
 Snoozing and settling only change how sessions are organized in the sidebar. They do not stop tasks, archive sessions, or delete content. **Resume at off-peak…** is the explicit exception: it creates a Harness scheduled task that sends your message. The Host persists task state by default; the browser-only fallback has a more limited lifecycle, described in [known limitations](docs/release.md#5-known-limitations).
 

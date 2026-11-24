@@ -11,7 +11,7 @@
  */
 import './styles.css'
 import type { Context } from '@deepseek-ai/cordis'
-import type { CommandAction } from '../contracts/schema.ts'
+import { HISTORY_SEARCH_LIMIT_MAX, type CommandAction } from '../contracts/schema.ts'
 import { snoozePresets } from '../domain/time.ts'
 import { known, type NativeState, type TaskFacts } from '../domain/types.ts'
 import {
@@ -230,6 +230,18 @@ export function apply(rawCtx: Context): void {
     listTransitions: async limit => backend === null ? [] : await backend.listTransitions(limit),
     previewPolicy: async draft => backend === null ? null : await backend.previewPolicy(draft),
     search: async (query, signal) => {
+      if (prefs.getSnapshot().historySearch && backend !== null) {
+        const history = await backend.searchHistory(query, HISTORY_SEARCH_LIMIT_MAX, signal)
+        if (history !== null) {
+          return {
+            items: history.hits.map(hit => ({ sessionId: hit.sessionId, snippet: hit.snippet, highlight: hit.highlight })),
+            hasMore: history.hasMore,
+            indexing: history.complete
+              ? undefined
+              : { ...history.progress ?? { indexed: 0, total: 0 }, limited: history.limited, reading: history.reading },
+          }
+        }
+      }
       const result = await ctx.sessions.search(query, signal)
       if (!result.ok || result.value === undefined) throw new Error('search failed')
       return { items: result.value.items.map(item => ({ sessionId: item.sessionId, snippet: item.snippet })), hasMore: result.value.hasMore }

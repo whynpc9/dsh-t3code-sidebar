@@ -171,6 +171,68 @@ describe('search (A07)', () => {
     expect(view.querySelector('.t3sb-search-tree')).toBeNull()
   })
 
+  it('history search: marks the match, says while the Host is still indexing, and asks again until complete', async () => {
+    const pages: SearchPage[] = [
+      { items: [], hasMore: false, indexing: { indexed: 3, total: 10, reading: true } },
+      { items: [{ sessionId: 's2', snippet: 'Fix the <b>Needle</b> bug', highlight: [11, 17] }], hasMore: false },
+    ]
+    const search = vi.fn(async () => pages.shift() ?? { items: [], hasMore: false })
+    const runtime = fakeRuntime({ sessions: [session('s1'), session('s2')], prefs: { historySearch: true }, overrides: { search } })
+    const view = render(runtime)
+    expect(searchInput(view).placeholder).toBe('search.placeholderHistory')
+    type(searchInput(view), 'needle')
+    await wait(300)
+    // Not "no matches" while sessions are still being read.
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')?.textContent).toBe('search.indexing(indexed=3,total=10)')
+    expect(view.textContent).not.toContain('search.noMatches')
+    await wait(1600)
+    expect(search).toHaveBeenCalledTimes(2)
+    expect(resultIds(view)).toEqual(['s2'])
+    expect(view.querySelector('.t3sb-search-mark')?.textContent).toBe('Needle')
+    // Snippet text is rendered as text, never as HTML.
+    expect(view.querySelector('.t3sb-search-snippet b')).toBeNull()
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')).toBeNull()
+  }, 10_000)
+
+  it('history search: stops asking when only unreadable sessions are left', async () => {
+    // A failed read leaves indexed < total, but the Host is no longer reading.
+    const search = vi.fn(async () => ({ items: [], hasMore: false, indexing: { indexed: 3, total: 4, reading: false } }))
+    const runtime = fakeRuntime({ sessions: [session('s1')], prefs: { historySearch: true }, overrides: { search } })
+    const view = render(runtime)
+    type(searchInput(view), 'needle')
+    await wait(300)
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')?.textContent).toBe('search.partial')
+    await wait(1600)
+    expect(search).toHaveBeenCalledTimes(1)
+  }, 10_000)
+
+  it('history search: keeps asking while the Host is still listing sessions', async () => {
+    const pages: SearchPage[] = [
+      { items: [], hasMore: false, indexing: { indexed: 0, total: 0, reading: true } },
+      { items: [{ sessionId: 's1', snippet: 'needle', highlight: [0, 6] }], hasMore: false },
+    ]
+    const search = vi.fn(async () => pages.shift() ?? { items: [], hasMore: false })
+    const runtime = fakeRuntime({ sessions: [session('s1')], prefs: { historySearch: true }, overrides: { search } })
+    const view = render(runtime)
+    type(searchInput(view), 'needle')
+    await wait(300)
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')?.textContent).toBe('search.listing')
+    await wait(1600)
+    expect(search).toHaveBeenCalledTimes(2)
+    expect(resultIds(view)).toEqual(['s1'])
+  }, 10_000)
+
+  it('history search: says when older sessions exceed the Host budget, and does not ask again', async () => {
+    const search = vi.fn(async () => ({ items: [], hasMore: false, indexing: { indexed: 4, total: 9, limited: true, reading: false } }))
+    const runtime = fakeRuntime({ sessions: [session('s1')], prefs: { historySearch: true }, overrides: { search } })
+    const view = render(runtime)
+    type(searchInput(view), 'needle')
+    await wait(300)
+    expect(view.querySelector('[data-testid="t3-search-indexing"]')?.textContent).toBe('search.limited')
+    await wait(1600)
+    expect(search).toHaveBeenCalledTimes(1)
+  }, 10_000)
+
   it('a late answer for a cleared query never brings results back', async () => {
     const reply = deferred<SearchPage>()
     const runtime = fakeRuntime({ sessions: [session('s1')], overrides: { search: vi.fn(() => reply.promise) } })

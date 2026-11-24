@@ -470,3 +470,29 @@ describe('HostBackend lost replies', () => {
     expect(remote.commands).toHaveLength(2)
   })
 })
+
+describe('HostBackend history search', () => {
+  const ok = { ok: true as const, hits: [], hasMore: false, complete: true, progress: null }
+
+  it('passes the query and signal, and answers null when the Host cannot', async () => {
+    const backend = start()
+    const signal = new AbortController().signal
+    // An older Host Remote without the method.
+    expect(await backend.searchHistory('x', 10, signal)).toBeNull()
+    const calls: unknown[][] = []
+    let reply: () => Promise<unknown> = async () => ({ ok: true, value: ok })
+    ;(remote as unknown as { searchHistory: unknown }).searchHistory = async (...args: unknown[]) => { calls.push(args); return await reply() }
+    expect(await backend.searchHistory('needle', 10, signal)).toEqual(ok)
+    expect(calls).toEqual([[{ protocolVersion: 1, query: 'needle', limit: 10 }, signal]])
+    reply = async () => ({ ok: true, value: { ok: false, code: 'FORBIDDEN', message: 'owner only' } })
+    expect(await backend.searchHistory('needle', 10, signal)).toBeNull()
+    reply = async () => ({ ok: false, error: { code: 'gateway/not-found', message: 'unknown method' } })
+    expect(await backend.searchHistory('needle', 10, signal)).toBeNull()
+    reply = async () => { throw new Error('offline') }
+    expect(await backend.searchHistory('needle', 10, signal)).toBeNull()
+    // A cancelled search rejects instead of looking like an unavailable Host.
+    const controller = new AbortController()
+    reply = async () => { controller.abort(); throw new Error('cancelled') }
+    await expect(backend.searchHistory('needle', 10, controller.signal)).rejects.toThrow()
+  })
+})

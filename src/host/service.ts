@@ -8,6 +8,8 @@
  * - "Resume at off-peak": arms a Harness schedule that messages the session at
  *   the end of the peak block, and deletes it when the user takes over first.
  * - Publishes a baseline + ordered deltas to owner Clients.
+ * - Opt-in history search: an in-memory index of stored conversations, built
+ *   on the first `searchHistory` call only (see `history-index.ts`).
  *
  * Remote methods are dispatched by the Gateway's SRC marker path; every
  * argument is validated with the protocol zod schemas before use.
@@ -17,8 +19,10 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import {
-  CommandInputSchema, PolicyInputSchema, PreviewInputSchema, PROTOCOL_VERSION, TaskRecordSchema, TimePolicySchema, TransitionSchema,
-  type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type HeldResult, type PolicyPreview, type PolicyResult,
+  CommandInputSchema, HistorySearchInputSchema, PolicyInputSchema, PreviewInputSchema, PROTOCOL_VERSION, TaskRecordSchema, TimePolicySchema,
+  TransitionSchema,
+  type Capabilities, type CommandInput, type CommandResult, type FollowEvent, type HeldResult, type HistorySearchResult, type PolicyPreview,
+  type PolicyResult,
   type Snapshot, type TaskView, type TransitionEntry,
 } from '../contracts/schema.ts'
 import { ACCESS_DENIED_CODE, NAMESPACE, PROTOCOL_MISMATCH_CODE, SERVICE_KEY } from '../contracts/remote.ts'
@@ -39,6 +43,7 @@ import {
   type HostSessionReadHandle,
   type HostProjectionsValue, type HostSessionController, type HostSessionPersistence, type HostWorkspaceRegistry, type OpenDomain,
 } from './harness.ts'
+import { HistoryIndex, HistoryUnavailableError, type HistorySource } from './history-index.ts'
 
 const GlobalSchema = z.object({
   installationId: z.string(),
@@ -198,6 +203,8 @@ export class T3SidebarService extends TypertRemoteService {
   private fallbackSweepAt = Date.now() + SWEEP_MS
   private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>()
   private disposed = false
+  /** Created by the first history search; nothing is indexed before. */
+  private history: HistoryIndex | undefined
   private capabilities: Capabilities = { hostActivity: false, sessionEvents: false, hostPending: false, hostSchedule: false }
   private markReady: () => void = () => {}
   /**
@@ -375,6 +382,45 @@ export class T3SidebarService extends TypertRemoteService {
       .map(([, entry]) => entry)
       .sort((left, right) => right.at - left.at)
       .slice(0, n)
+  }
+
+  /**
+   * Opt-in history search. Owner only: message text is not covered by the
+   * task grant a shared viewer may hold, and a refusal lets the Client fall
+   * back to the native search, which applies the viewer's own grants.
+   */
+  @Remote('searchHistory')
+  async searchHistory(t3HistorySearchInput: unknown, signal?: AbortSignal): Promise<HistorySearchResult> {
+    const invocation = this.ctx.invocation
+    if (invocation !== undefined && invocation.peer.principal.kind !== 'owner') {
+      return { ok: false, code: 'FORBIDDEN', message: 'history search is available to the Host owner only' }
+    }
+    const parsed = HistorySearchInputSchema.safeParse(t3HistorySearchInput)
+    if (!parsed.success) return { ok: false, code: 'PROTOCOL_MISMATCH', message: parsed.error.message }
+    if (parsed.data.protocolVersion !== PROTOCOL_VERSION) {
+      return { ok: false, code: 'PROTOCOL_MISMATCH', message: `protocol ${parsed.data.protocolVersion} unsupported` }
+    }
+    const persistence = optionalService<HostSessionPersistence>(this.ctx, 'sessionPersistence')
+    if (this.disposed || persistence?.open === undefined) {
+      return { ok: false, code: 'UNSUPPORTED', message: 'session persistence cannot be read on this Host' }
+    }
+    this.history ??= new HistoryIndex(historySource(persistence))
+    let result
+    try {
+      result = await this.history.search(parsed.data.query, parsed.data.limit, signal ?? new AbortController().signal)
+    } catch (error) {
+      if (error instanceof HistoryUnavailableError) return { ok: false, code: 'UNAVAILABLE', message: error.message }
+      throw error
+    }
+    return {
+      ok: true,
+      hits: result.hits.map(hit => ({ ...hit, highlight: [hit.highlight[0], hit.highlight[1]] })),
+      hasMore: result.hasMore,
+      complete: result.complete,
+      limited: result.limited,
+      reading: result.reading,
+      progress: result.progress,
+    }
   }
 
   // ── Commands ──────────────────────────────────────────────────────────────
@@ -1186,6 +1232,7 @@ export class T3SidebarService extends TypertRemoteService {
     // persistence token; record that it was observed live even when the
     // summary does not fold it, so catch-up never mistakes it for missed work.
     this.observedLive.add(sessionId)
+    this.history?.observe(sessionId, event)
     const foldable = toFoldable(event)
     if (foldable === null) return
     // Counted now, folded later: a sweep that started earlier must not judge
@@ -1446,6 +1493,8 @@ export class T3SidebarService extends TypertRemoteService {
 
   private dispose(): void {
     this.disposed = true
+    this.history?.dispose()
+    this.history = undefined
     if (this.timer !== undefined) clearTimeout(this.timer)
     for (const timer of this.pendingTimers) clearTimeout(timer)
     this.pendingTimers.clear()
@@ -1596,5 +1645,39 @@ function toFoldable(event: HostSessionEvent): FoldableEvent | null {
     }
     default:
       return null
+  }
+}
+
+const HISTORY_READ_CHUNK = 512
+
+/** History source over session persistence: stored, non-subagent logs read through `read` handles. */
+function historySource(persistence: HostSessionPersistence): HistorySource {
+  return {
+    async list() {
+      const stored = await persistence.list()
+      return stored
+        .filter(({ header }) => header.origin !== 'subagent')
+        .map(({ header, revision }) => ({
+          id: header.id, createdAt: header.createdAt, token: revision === undefined ? undefined : JSON.stringify(revision),
+        }))
+    },
+    async read(id, offset, signal) {
+      if (persistence.open === undefined) return null
+      let handle: HostSessionReadHandle | undefined
+      try {
+        handle = await persistence.open(id, 'read', { signal })
+        const events: HostSessionEvent[] = []
+        for (let at = offset; ;) {
+          const chunk = await handle.read(at, HISTORY_READ_CHUNK, { signal })
+          events.push(...chunk.events)
+          if (chunk.events.length < HISTORY_READ_CHUNK) return events
+          at += chunk.events.length
+        }
+      } catch {
+        return null
+      } finally {
+        await handle?.close().catch(() => undefined)
+      }
+    },
   }
 }

@@ -24,6 +24,12 @@ export interface Prefs {
    * hours. On by default.
    */
   readonly offPeakSnooze: boolean
+  /**
+   * Search the text of past conversations through the Host's own index
+   * instead of the native search. Off by default; falls back to the native
+   * search whenever the Host cannot answer.
+   */
+  readonly historySearch: boolean
   /** Explicit collapse state: `status:<section>` or `workspace:<group key>` → collapsed. */
   readonly collapsed: Readonly<Record<string, boolean>>
   /** Per-browser read marker: last turn-end seq seen in the main view. */
@@ -35,6 +41,7 @@ export const DEFAULT_PREFS: Prefs = {
   archivedFilter: 'default',
   workingSection: false,
   offPeakSnooze: true,
+  historySearch: false,
   collapsed: {},
   lastSeen: {},
 }
@@ -60,6 +67,7 @@ export function migratePrefs(raw: unknown): Prefs {
     : 'default'
   const workingSection = raw['workingSection'] === true
   const offPeakSnooze = raw['offPeakSnooze'] !== false
+  const historySearch = raw['historySearch'] === true
   const collapsed: Record<string, boolean> = {}
   if (isRecord(raw['collapsed'])) {
     for (const [key, value] of Object.entries(raw['collapsed'])) {
@@ -72,12 +80,24 @@ export function migratePrefs(raw: unknown): Prefs {
   if (isRecord(raw['lastSeen'])) {
     for (const [key, value] of Object.entries(raw['lastSeen'])) if (typeof value === 'number') lastSeen[key] = value
   }
-  return { groupBy, archivedFilter, workingSection, offPeakSnooze, collapsed, lastSeen }
+  return { groupBy, archivedFilter, workingSection, offPeakSnooze, historySearch, collapsed, lastSeen }
 }
 
 export interface SearchPage {
   readonly items: readonly ContentHit[]
   readonly hasMore: boolean
+  /**
+   * History search only: the Host is still reading sessions (or could not
+   * read some), so an empty page is not "no matches". Absent: complete.
+   */
+  readonly indexing?: {
+    readonly indexed: number
+    readonly total: number
+    /** The Host left older sessions or messages out (memory budget). */
+    readonly limited?: boolean | undefined
+    /** The Host is still listing or reading sessions: asking again can find more. */
+    readonly reading?: boolean | undefined
+  } | undefined
 }
 
 export interface Transition {

@@ -359,11 +359,14 @@ export function sanitizeQuery(value: string): string {
 export interface ContentHit {
   readonly sessionId: string
   readonly snippet?: string | undefined
+  /** UTF-16 half-open range of the match inside `snippet` (history search only). */
+  readonly highlight?: readonly [number, number] | undefined
 }
 
 export interface SearchResult {
   readonly row: Row
   readonly snippet: string | null
+  readonly highlight: readonly [number, number] | null
   /** Where the session lives: its workspace title, else its directory's name; empty means Ungrouped. */
   readonly place: string
 }
@@ -398,8 +401,8 @@ export function searchResults(
   if (q === '') return { items: [], truncated: false }
   const eligible = rows.filter(row => !row.blank && visibleUnder(row, filter))
   const byId = new Map(eligible.map(row => [row.sessionId, row]))
-  const snippets = new Map<string, string>()
-  for (const hit of content) if (hit.snippet !== undefined && !snippets.has(hit.sessionId)) snippets.set(hit.sessionId, hit.snippet)
+  const snippets = new Map<string, ContentHit>()
+  for (const hit of content) if (hit.snippet !== undefined && !snippets.has(hit.sessionId)) snippets.set(hit.sessionId, hit)
   const ordered: Row[] = []
   const seen = new Set<string>()
   const include = (row: Row | undefined) => {
@@ -414,7 +417,10 @@ export function searchResults(
   for (const row of local) include(row)
   for (const hit of content) include(byId.get(hit.sessionId))
   return {
-    items: ordered.slice(0, limit).map(row => ({ row, snippet: snippets.get(row.sessionId) ?? null, place: placeOf(row) })),
+    items: ordered.slice(0, limit).map((row) => {
+      const hit = snippets.get(row.sessionId)
+      return { row, snippet: hit?.snippet ?? null, highlight: hit?.highlight ?? null, place: placeOf(row) }
+    }),
     truncated: ordered.length > limit,
   }
 }

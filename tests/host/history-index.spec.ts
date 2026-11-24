@@ -1,0 +1,419 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { HistoryIndex, HistoryUnavailableError, type HistorySource } from '../../src/host/history-index.ts'
+import type { HistoryEvent } from '../../src/domain/history-text.ts'
+
+interface FakeSession { createdAt: number; token: string; events: HistoryEvent[]; fail?: boolean }
+
+const message = (seq: number, text: string, role: 'user' | 'assistant' = 'user'): HistoryEvent => role === 'user'
+  ? { type: 'user/message', seq, time: 1000 * seq, surfaceOp: 'append', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } }
+  : { type: 'assistant/message', seq, time: 1000 * seq, surfaceOp: 'append', data: { message: { content: [{ type: 'text', text }] } } }
+const boundary = (seq: number): HistoryEvent => ({ type: 'turn/end', seq, time: 1000 * seq, data: { reason: { kind: 'completed' } } })
+
+function fakeSource(sessions: Map<string, FakeSession>) {
+  const reads: { id: string; offset: number }[] = []
+  let lists = 0
+  let gate: Promise<void> | null = null
+  let listGate: Promise<void> | null = null
+  let listFails = false
+  const source: HistorySource = {
+    async list() {
+      lists++
+      // The snapshot is taken when the listing starts, however long it then takes to return.
+      const snapshot = [...sessions].map(([id, session]) => ({ id, createdAt: session.createdAt, token: session.token }))
+      if (listGate !== null) await listGate
+      if (listFails) throw new Error('listing failed')
+      return snapshot
+    },
+    async read(id, offset) {
+      reads.push({ id, offset })
+      if (gate !== null) await gate
+      const session = sessions.get(id)
+      if (session === undefined || session.fail === true) return null
+      return session.events.slice(offset)
+    },
+  }
+  return {
+    source, reads,
+    get lists() { return lists },
+    failList(value: boolean) { listFails = value },
+    hold() { let release!: () => void; gate = new Promise((resolve) => { release = resolve }); return () => { gate = null; release() } },
+    holdList() { let release!: () => void; listGate = new Promise((resolve) => { release = resolve }); return () => { listGate = null; release() } },
+  }
+}
+
+const signal = () => new AbortController().signal
+let indexes: HistoryIndex[] = []
+const create = (source: HistorySource, options: ConstructorParameters<typeof HistoryIndex>[1] = {}) => {
+  const index = new HistoryIndex(source, { waitMs: 5_000, ...options })
+  indexes.push(index)
+  return index
+}
+afterEach(() => { for (const index of indexes) index.dispose(); indexes = [] })
+
+describe('HistoryIndex', () => {
+  it('does nothing until the first search, then finds every session including the oldest', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 300; i++) {
+      sessions.set(`s${i}`, { createdAt: i, token: 't1', events: [message(0, `filler ${i}`), boundary(1), message(2, `reply ${i}`, 'assistant')] })
+    }
+    sessions.get('s0')!.events.push(message(3, '最旧的唯一命中 needle'))
+    const fake = fakeSource(sessions)
+    const index = create(fake.source)
+    expect(fake.lists).toBe(0)
+    expect(index.active).toBe(false)
+    const result = await index.search('NEEDLE', 50, signal())
+    expect(result).toMatchObject({ complete: true, progress: null, hasMore: false })
+    expect(result.hits).toEqual([{ sessionId: 's0', seq: 3, at: 3000, role: 'user', snippet: '最旧的唯一命中 needle', highlight: [8, 14] }])
+    // One- and two-character CJK queries scan everything too.
+    expect((await index.search('旧', 50, signal())).hits.map(hit => hit.sessionId)).toEqual(['s0'])
+    expect((await index.search('reply 29', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s29', 's290', 's291', 's292', 's293', 's294', 's295', 's296', 's297', 's298', 's299'].sort())
+  })
+
+  it('orders by the matching message time, caps the page and reports more', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['old', { createdAt: 1, token: 't', events: [message(0, 'match early'), message(1, 'other')] }],
+      ['new', { createdAt: 0, token: 't', events: [message(0, 'x'), message(1, 'x'), message(5, 'match late')] }],
+      ['mid', { createdAt: 2, token: 't', events: [message(0, 'x'), message(3, 'match mid')] }],
+    ])
+    const index = create(fakeSource(sessions).source)
+    const result = await index.search('match', 2, signal())
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['new', 'mid'])
+    expect(result.hasMore).toBe(true)
+  })
+
+  it('reads only new events when a token changes, and drops deleted sessions', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['a', { createdAt: 1, token: 't1', events: [message(0, 'first')] }],
+      ['b', { createdAt: 2, token: 't1', events: [message(0, 'gone soon')] }],
+    ])
+    const fake = fakeSource(sessions)
+    let now = 0
+    const index = create(fake.source, { refreshMs: 10, now: () => now })
+    await index.search('first', 10, signal())
+    sessions.get('a')!.events.push(boundary(1), message(2, 'second'))
+    sessions.get('a')!.token = 't2'
+    sessions.delete('b')
+    now = 100
+    fake.reads.length = 0
+    const result = await index.search('second', 10, signal())
+    // One event early: the last one indexed confirms the log still continues it.
+    expect(fake.reads).toEqual([{ id: 'a', offset: 0 }])
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['a'])
+    expect(index.stats()).toMatchObject({ sessions: 1, documents: 2 })
+    expect((await index.search('gone', 10, signal())).hits).toEqual([])
+    // Unchanged tokens are not read again within the refresh window or after it.
+    now = 200
+    fake.reads.length = 0
+    await index.search('first', 10, signal())
+    expect(fake.reads).toEqual([])
+  })
+
+  it('re-reads a whole log when an incremental read does not continue it', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'before'), message(1, 'old words')] }]])
+    const fake = fakeSource(sessions)
+    let now = 0
+    const index = create(fake.source, { refreshMs: 10, now: () => now })
+    await index.search('old', 10, signal())
+    // The log was rewritten (repair): the events after the old offset do not continue at the expected seq.
+    sessions.get('a')!.events = [message(10, 'before'), message(11, 'new words'), message(12, 'x'), message(13, 'more')]
+    sessions.get('a')!.token = 't2'
+    now = 100
+    fake.reads.length = 0
+    expect((await index.search('new words', 10, signal())).hits).toHaveLength(1)
+    expect(fake.reads).toEqual([{ id: 'a', offset: 1 }, { id: 'a', offset: 0 }])
+    expect((await index.search('old words', 10, signal())).hits).toHaveLength(0)
+  })
+
+  it('detects a rewritten or shorter tail at once', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'keep'), message(1, 'secret draft')] }]])
+    const fake = fakeSource(sessions)
+    let now = 0
+    const index = create(fake.source, { refreshMs: 10, now: () => now })
+    await index.search('secret', 10, signal())
+    // Same seq, rewritten event (another time), plus an append.
+    sessions.get('a')!.events = [message(0, 'keep'), { ...message(1, 'edited'), time: 99 }, message(2, 'more')]
+    sessions.get('a')!.token = 't2'
+    now = 100
+    expect((await index.search('secret', 10, signal())).hits).toEqual([])
+    expect((await index.search('edited', 10, signal())).hits).toHaveLength(1)
+    // Truncated: the overlap read finds nothing.
+    sessions.get('a')!.events = [message(0, 'keep')]
+    sessions.get('a')!.token = 't3'
+    now = 200
+    expect((await index.search('edited', 10, signal())).hits).toEqual([])
+    expect((await index.search('keep', 10, signal())).hits).toHaveLength(1)
+  })
+
+  it('periodically re-reads whole logs', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'same')] }]])
+    const fake = fakeSource(sessions)
+    let now = 0
+    const index = create(fake.source, { refreshMs: 10, fullReadMs: 1000, now: () => now })
+    await index.search('same', 10, signal())
+    now = 2000
+    fake.reads.length = 0
+    await index.search('same', 10, signal())
+    expect(fake.reads).toEqual([{ id: 'a', offset: 0 }])
+  })
+
+  it('indexes live messages of sessions already read and lists new sessions', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 60_000 })
+    await index.search('hello', 10, signal())
+    index.observe('a', message(1, 'live words', 'assistant'))
+    // A gap (missed event) is not appended; the next read catches up.
+    index.observe('a', message(5, 'skipped words'))
+    expect((await index.search('live', 10, signal())).hits).toMatchObject([{ sessionId: 'a', role: 'assistant', seq: 1 }])
+    expect((await index.search('skipped', 10, signal())).hits).toEqual([])
+    // A new session is listed and read on the next search, without waiting for `refreshMs`.
+    sessions.set('new', { createdAt: 2, token: 't1', events: [message(0, 'brand new')] })
+    index.observe('new', message(0, 'brand new'))
+    const result = await index.search('brand', 10, signal())
+    expect(result).toMatchObject({ complete: true })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['new'])
+  })
+
+  it('keeps live messages that arrive while a full re-read is in flight', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, fullReadMs: 50, refreshWaitMs: 5, now: () => now })
+    await index.search('hello', 10, signal())
+    // A periodic full re-read starts from the log as it is; a message arrives live before it returns.
+    const release = fake.hold()
+    now = 100
+    await index.search('hello', 10, signal())
+    index.observe('a', message(1, 'arrived live'))
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    now = 105
+    expect((await index.search('arrived', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+    // The cursor follows the replayed event, so the next live event is not a gap.
+    index.observe('a', message(2, 'next live'))
+    expect((await index.search('next live', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('keeps a session first seen live while a listing is in flight', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    await index.search('hello', 10, signal())
+    // The listing snapshot is taken before the new session exists.
+    const releaseList = fake.holdList()
+    now = 100
+    await index.search('hello', 10, signal())
+    sessions.set('fresh', { createdAt: 2, token: 't1', events: [message(0, 'fresh words')] })
+    index.observe('fresh', message(0, 'fresh words'))
+    // The held listing returns without 'fresh': it must not be dropped as deleted.
+    releaseList()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect((await index.search('fresh', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['fresh'])
+  })
+
+  it('does not call a result complete when a read commits into an already-scanned entry mid-scan', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 450; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, i === 449 ? 'needle' : 'hay')] })
+    const fake = fakeSource(sessions)
+    const release = fake.hold()
+    const index = create(fake.source, { waitMs: 5 })
+    const searching = index.search('needle', 10, signal())
+    // Fires right after the search's own 5 ms wait: the scan has started (s449 first) and is at its
+    // first yield, so every read commits before it resumes.
+    setTimeout(release, 5)
+    const result = await searching
+    // The scan passed s449 (newest, scanned first) before its read committed.
+    expect(result.hits).toEqual([])
+    expect(result).toMatchObject({ complete: false, reading: true })
+  })
+
+  it('answers partially while sessions are still being read', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }],
+      ['b', { createdAt: 2, token: 't', events: [message(0, 'needle')] }],
+    ])
+    const fake = fakeSource(sessions)
+    const release = fake.hold()
+    const index = create(fake.source, { waitMs: 10 })
+    expect(await index.search('needle', 10, signal())).toMatchObject({ hits: [], complete: false, progress: { indexed: 0, total: 2 } })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const result = await index.search('needle', 10, signal())
+    expect(result).toMatchObject({ complete: true, progress: null })
+    expect(result.hits).toHaveLength(2)
+  })
+
+  it('does not hold a search on a slow routine re-listing once everything is indexed', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }]])
+    const fake = fakeSource(sessions)
+    let now = 0
+    const index = create(fake.source, { refreshMs: 10, refreshWaitMs: 20, now: () => now })
+    await index.search('needle', 10, signal())
+    const release = fake.holdList()
+    now = 100
+    const started = Date.now()
+    const result = await index.search('needle', 10, signal())
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(result).toMatchObject({ complete: true, progress: null })
+    expect(result.hits).toHaveLength(1)
+    release()
+  })
+
+  it('reports unreadable sessions as incomplete and retries them', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }],
+      ['b', { createdAt: 2, token: 't', events: [message(0, 'needle')], fail: true }],
+    ])
+    let now = 0
+    const index = create(fakeSource(sessions).source, { refreshMs: 10, now: () => now })
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: false, progress: { indexed: 1, total: 2 } })
+    sessions.get('b')!.fail = false
+    now = 100
+    const result = await index.search('needle', 10, signal())
+    expect(result).toMatchObject({ complete: true })
+    expect(result.hits).toHaveLength(2)
+  })
+
+  it('stays within the memory budget: newest sessions first, older ones left out and reported', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 10; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, `needle ${'x'.repeat(95)}`)] })
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { maxUnits: 350, refreshMs: 10, concurrency: 1, now: () => now })
+    const result = await index.search('needle', 50, signal())
+    // Each session holds 102 units (no folded copy): three fit; the fourth is cut and nothing older is read.
+    expect(result).toMatchObject({ complete: false, limited: true, reading: false, progress: { indexed: 3, total: 10 } })
+    expect(result.hits.map(hit => hit.sessionId).sort()).toEqual(['s7', 's8', 's9'])
+    expect(index.stats().units).toBe(3 * 102)
+    expect(fake.reads.map(read => read.id)).toEqual(['s9', 's8', 's7', 's6'])
+    // Deleting held sessions frees budget for the next newest.
+    for (const id of ['s9', 's8']) sessions.delete(id)
+    now = 100
+    expect((await index.search('needle', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s5', 's6', 's7'])
+    expect(index.stats().units).toBeLessThanOrEqual(350)
+  })
+
+  it('makes room for a session created after the budget was reached', async () => {
+    const sessions = new Map<string, FakeSession>()
+    for (let i = 0; i < 4; i++) sessions.set(`s${i}`, { createdAt: i, token: 't', events: [message(0, `old ${'x'.repeat(98)}`)] })
+    let now = 10
+    const index = create(fakeSource(sessions).source, { maxUnits: 350, refreshMs: 10, now: () => now })
+    expect((await index.search('old', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s1', 's2', 's3'])
+    // A new session appears live, then in the listing.
+    index.observe('fresh', message(0, 'x'))
+    sessions.set('fresh', { createdAt: 20, token: 't', events: [message(0, `fresh needle ${'x'.repeat(89)}`)] })
+    now = 100
+    const result = await index.search('fresh needle', 50, signal())
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['fresh'])
+    // The oldest held session gave way.
+    expect((await index.search('old', 50, signal())).hits.map(hit => hit.sessionId).sort()).toEqual(['s2', 's3'])
+    expect(index.stats().units).toBeLessThanOrEqual(350)
+  })
+
+  it('bounds a single session larger than the budget, including live growth, keeping its newest messages', async () => {
+    const events = Array.from({ length: 100 }, (_, i) => message(i, `m${String(i).padStart(3, '0')} ${'x'.repeat(995)}`))
+    const sessions = new Map<string, FakeSession>([
+      ['big', { createdAt: 1, token: 't', events }],
+      ['small', { createdAt: 0, token: 't', events: [message(0, 'tiny')] }],
+    ])
+    const index = create(fakeSource(sessions).source, { maxUnits: 5000, concurrency: 1 })
+    const result = await index.search('m099', 50, signal())
+    expect(result).toMatchObject({ complete: false, limited: true, reading: false })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['big'])
+    expect((await index.search('m000', 50, signal())).hits).toEqual([])
+    // The older, smaller session was not read once the budget was spent.
+    expect((await index.search('tiny', 50, signal())).hits).toEqual([])
+    expect(index.stats().units).toBeLessThanOrEqual(5000)
+    // Live growth stays within the budget too, dropping the oldest messages kept.
+    index.observe('big', message(100, `m100 ${'x'.repeat(995)}`))
+    expect(index.stats().units).toBeLessThanOrEqual(5000)
+    expect((await index.search('m100', 50, signal())).hits).toHaveLength(1)
+    expect((await index.search('m095', 50, signal())).hits).toEqual([])
+  })
+
+  it('reports a changed log as not up to date until its catch-up read finishes', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't1', events: [message(0, 'hello')] }]])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: true, reading: false })
+    // New messages committed while nobody observed them live; the read is slow.
+    sessions.set('a', { createdAt: 1, token: 't2', events: [message(0, 'hello'), message(1, 'needle')] })
+    const release = fake.hold()
+    now = 100
+    expect(await index.search('needle', 10, signal())).toMatchObject({ hits: [], complete: false, reading: true, progress: { indexed: 0, total: 1 } })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const result = await index.search('needle', 10, signal())
+    expect(result).toMatchObject({ complete: true, reading: false })
+    expect(result.hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('says unavailable when the first listing fails, and lists again on the next search', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }]])
+    const fake = fakeSource(sessions)
+    fake.failList(true)
+    const index = create(fake.source)
+    await expect(index.search('needle', 10, signal())).rejects.toBeInstanceOf(HistoryUnavailableError)
+    fake.failList(false)
+    expect((await index.search('needle', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['a'])
+  })
+
+  it('discards a read of a session evicted while the read was in flight', async () => {
+    const pad = (text: string) => `${text} ${'x'.repeat(90)}`
+    const sessions = new Map<string, FakeSession>([
+      ['old', { createdAt: 1, token: 't1', events: [message(0, pad('alpha'))] }],
+      ['new', { createdAt: 2, token: 't1', events: [message(0, pad('beta'))] }],
+    ])
+    let now = 0
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { maxUnits: 300, refreshMs: 10, refreshWaitMs: 5, now: () => now })
+    expect((await index.search('x', 10, signal())).hits).toHaveLength(2)
+    // Both logs grow; the newer one grows past the budget while the older one's read is in flight.
+    sessions.set('old', { createdAt: 1, token: 't2', events: [message(0, pad('alpha')), message(1, 'oldtail')] })
+    sessions.set('new', { createdAt: 2, token: 't2', events: [message(0, pad('beta')), message(1, pad(`newtail ${'y'.repeat(50)}`))] })
+    const release = fake.hold()
+    now = 100
+    await index.search('x', 10, signal())
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const result = await index.search('oldtail', 10, signal())
+    // The older session gave way: neither its text nor its tail is held, and the result says so.
+    expect(result).toMatchObject({ hits: [], complete: false, limited: true })
+    expect((await index.search('alpha', 10, signal())).hits).toEqual([])
+    expect((await index.search('newtail', 10, signal())).hits.map(hit => hit.sessionId)).toEqual(['new'])
+    expect(index.stats().units).toBeLessThanOrEqual(300)
+  })
+
+  it('says reading only while sessions are still to be listed or read', async () => {
+    const sessions = new Map<string, FakeSession>([
+      ['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }],
+      ['b', { createdAt: 2, token: 't', events: [], fail: true }],
+    ])
+    const fake = fakeSource(sessions)
+    const release = fake.holdList()
+    const index = create(fake.source, { waitMs: 10 })
+    // The first listing is slow: nothing listed yet, but asking again will help.
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: false, reading: true, progress: { indexed: 0, total: 0 } })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // A log that cannot be read is not "still reading".
+    expect(await index.search('needle', 10, signal())).toMatchObject({ complete: false, reading: false, limited: false, progress: { indexed: 1, total: 2 } })
+  })
+
+  it('stops on abort and frees memory when idle', async () => {
+    const sessions = new Map<string, FakeSession>([['a', { createdAt: 1, token: 't', events: [message(0, 'needle')] }]])
+    const fake = fakeSource(sessions)
+    const index = create(fake.source, { idleMs: 20 })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(index.search('needle', 10, controller.signal)).rejects.toThrow()
+    await index.search('needle', 10, signal())
+    expect(index.active).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(index.active).toBe(false)
+    expect((await index.search('needle', 10, signal())).hits).toHaveLength(1)
+    expect(fake.lists).toBe(2)
+  })
+})

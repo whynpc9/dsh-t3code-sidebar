@@ -10,7 +10,7 @@ const detailDocs = ['docs/DETAIL.md', 'docs/DETAIL.zh.md']
 const publicDocs = [...detailDocs, 'docs/README.md', 'docs/README.zh.md']
 const required = [
   'package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'LICENSE', 'README.md', 'README.zh.md', 'CHANGELOG.md',
-  'locale/en.json', 'locale/zh.json', ...detailDocs,
+  'locale/en.json', 'locale/zh.json', 'THIRD_PARTY_NOTICES.md', ...detailDocs,
 ]
 const missing = required.filter(file => !files.includes(file))
 const forbidden = files.filter(file => (

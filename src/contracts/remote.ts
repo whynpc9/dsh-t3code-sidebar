@@ -11,8 +11,8 @@
  */
 import { z, type ZodType } from 'zod'
 import {
-  CommandInputSchema, CommandResultSchema, FollowEventSchema, PolicyInputSchema, PolicyPreviewSchema, PolicyResultSchema,
-  PreviewInputSchema, SnapshotSchema, TransitionSchema,
+  CommandInputSchema, CommandResultSchema, FollowEventSchema, HistorySearchInputSchema, HistorySearchResultSchema, PolicyInputSchema,
+  PolicyPreviewSchema, PolicyResultSchema, PreviewInputSchema, SnapshotSchema, TransitionSchema,
 } from './schema.ts'
 
 export const PACKAGE = 'dsh-t3code-sidebar'
@@ -95,6 +95,14 @@ export const REMOTE_SPEC = {
       description: 'Most recent automatic and manual state transitions (no message content).',
       parameters: [param('t3Limit', z.number().int().min(1).max(1000), 'Limit')],
       result: codec(z.array(TransitionSchema), 'Transitions'),
+    },
+    [`${NAMESPACE}/searchHistory`]: {
+      service: SERVICE_KEY,
+      invocation: direct,
+      description: 'Opt-in literal search over the conversation text of stored sessions (owner only); absent from older Hosts.',
+      parameters: [param('t3HistorySearchInput', HistorySearchInputSchema, 'HistorySearchInput')],
+      cancellation: { parameter: 'signal' as const },
+      result: codec(HistorySearchResultSchema, 'HistorySearchResult'),
     },
   },
 } as const
